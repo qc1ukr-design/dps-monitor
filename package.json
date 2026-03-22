@@ -2,14 +2,10 @@
   "name": "dps-monitor",
   "version": "1.0.0",
   "private": true,
-  "workspaces": [
-    "web",
-    "mobile"
-  ],
   "scripts": {
-    "dev:web": "npm run dev --workspace=web",
-    "dev:mobile": "npm run start --workspace=mobile",
-    "build:web": "npm run build --workspace=web"
+    "dev:web": "cd web && npm run dev",
+    "dev:mobile": "cd mobile && npm run start",
+    "build:web": "cd web && npm run build"
   },
   "description": "DPS Monitor — centralized dashboard for tax monitoring via DPS API"
 }

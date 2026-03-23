@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Шифруємо і зберігаємо токен ДПС
-  const tokenEncrypted = encrypt(dpsToken)
+  const tokenEncrypted = encrypt(dpsToken.trim())
   const { error: tokenError } = await supabase
     .from('api_tokens')
     .insert({ client_id: client.id, user_id: user.id, token_encrypted: tokenEncrypted })

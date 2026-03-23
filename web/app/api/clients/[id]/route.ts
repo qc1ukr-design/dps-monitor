@@ -30,7 +30,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 
   if (!client) return NextResponse.json({ error: 'Client not found' }, { status: 404 })
 
-  const tokenEncrypted = encrypt(dpsToken)
+  const tokenEncrypted = encrypt(dpsToken.trim())
 
   // Upsert token
   const { error } = await supabase

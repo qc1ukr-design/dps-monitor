@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
 
   let token: string
   try {
-    token = decrypt(tokenRow.token_encrypted)
+    token = decrypt(tokenRow.token_encrypted).trim()
   } catch {
     return NextResponse.json({ error: 'Failed to decrypt token' }, { status: 500 })
   }

@@ -16,7 +16,7 @@ async function getToken(clientId: string, userId: string): Promise<string | null
 
   if (!data?.token_encrypted) return null
   try {
-    return decrypt(data.token_encrypted)
+    return decrypt(data.token_encrypted).trim()
   } catch {
     return null
   }

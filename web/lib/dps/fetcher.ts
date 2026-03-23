@@ -3,7 +3,7 @@ import { decrypt } from '@/lib/crypto'
 import { MOCK_PROFILE, MOCK_BUDGET } from './mock-data'
 import type { TaxpayerProfile, BudgetCalculations, DpsApiResponse } from './types'
 
-const DPS_BASE_URL = 'https://cabinet.tax.gov.ua/ws/public_api'
+const DPS_BASE_URL = 'https://cabinet.tax.gov.ua/ws/a'
 
 async function getToken(clientId: string, userId: string): Promise<string | null> {
   const supabase = await createClient()
@@ -26,7 +26,7 @@ async function dpsGet(endpoint: string, token: string) {
   const res = await fetch(`${DPS_BASE_URL}/${endpoint}`, {
     method: 'GET',
     headers: {
-      Authorization: token,
+      Authorization: `Bearer ${token}`,
       Accept: 'application/json',
     },
     signal: AbortSignal.timeout(10000),
@@ -47,7 +47,7 @@ export async function fetchProfile(
   if (!token) return { data: MOCK_PROFILE, error: 'No token', isMock: true }
 
   try {
-    const data = await dpsGet('payer_card', token)
+    const data = await dpsGet('payer/payer_card', token)
     if (data) return { data, error: null, isMock: false }
   } catch (e) {
     console.warn('fetchProfile error:', e)
@@ -64,7 +64,7 @@ export async function fetchBudget(
 
   const year = new Date().getFullYear()
   try {
-    const raw = await dpsGet(`ta/splatp?year=${year}`, token)
+    const raw = await dpsGet(`ta/splatp/sti?year=${year}`, token)
     if (raw) return { data: raw, error: null, isMock: false }
   } catch (e) {
     console.warn('fetchBudget error:', e)

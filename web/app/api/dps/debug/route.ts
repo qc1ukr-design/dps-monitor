@@ -5,8 +5,9 @@ import { decrypt } from '@/lib/crypto'
 async function tryFetch(url: string, opts: RequestInit) {
   try {
     const res = await fetch(url, { ...opts, signal: AbortSignal.timeout(8000), cache: 'no-store' })
+    const text = await res.text()
     let body: unknown
-    try { body = await res.json() } catch { body = await res.text() }
+    try { body = JSON.parse(text) } catch { body = text }
     return { status: res.status, ok: res.ok, body }
   } catch (e) {
     return { error: String(e) }

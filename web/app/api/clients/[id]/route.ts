@@ -32,13 +32,23 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 
   const tokenEncrypted = encrypt(dpsToken.trim())
 
-  // Upsert token
-  const { error } = await supabase
+  // Try UPDATE first, then INSERT if no row exists
+  const { data: existing } = await supabase
     .from('api_tokens')
-    .upsert(
-      { client_id: id, user_id: user.id, token_encrypted: tokenEncrypted },
-      { onConflict: 'client_id,user_id' }
-    )
+    .select('id')
+    .eq('client_id', id)
+    .eq('user_id', user.id)
+    .single()
+
+  const { error } = existing
+    ? await supabase
+        .from('api_tokens')
+        .update({ token_encrypted: tokenEncrypted })
+        .eq('client_id', id)
+        .eq('user_id', user.id)
+    : await supabase
+        .from('api_tokens')
+        .insert({ client_id: id, user_id: user.id, token_encrypted: tokenEncrypted })
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 

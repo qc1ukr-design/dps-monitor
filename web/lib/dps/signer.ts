@@ -17,7 +17,7 @@
 const jk = require('jkurwa') as typeof import('jkurwa')
 const gost89 = require('gost89') as { compat: { algos: () => unknown } }
 const AdmZip = require('adm-zip') as new (buf: Buffer) => {
-  getEntries(): Array<{ entryName: string; getData(): Buffer }>
+  getEntries(): Array<{ entryName: string; isDirectory: boolean; header: { size: number }; getData(): Buffer }>
 }
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -36,29 +36,54 @@ function isZip(buf: Buffer): boolean {
 }
 
 /**
- * If the file is a ZIP container (.ZS2, .ZS3, etc.),
+ * If the file is a ZIP container (.ZS2, .ZS3, .zip, etc.),
  * extract key buffers and cert buffers from it.
+ * Returns file list for debugging.
  */
-function extractFromZip(zipBuf: Buffer): { keyBuffers: Buffer[]; certBuffers: Buffer[] } {
+function extractFromZip(zipBuf: Buffer): {
+  keyBuffers: Buffer[]
+  certBuffers: Buffer[]
+  fileNames: string[]
+} {
   const zip = new AdmZip(zipBuf)
   const entries = zip.getEntries()
 
+  const CERT_EXTS = ['.cer', '.crt', '.p7b', '.p7c', '.pem']
+  const KEY_EXTS  = ['.dat', '.pfx', '.p12', '.jks', '.key']
+
   const keyBuffers: Buffer[] = []
   const certBuffers: Buffer[] = []
+  const otherBuffers: Buffer[] = []
+  const fileNames: string[] = []
 
   for (const entry of entries) {
+    if (entry.isDirectory) continue
     const name = entry.entryName.toLowerCase()
-    // Key files
-    if (name.endsWith('.dat') || name.endsWith('.pfx') || name.endsWith('.p12') || name.endsWith('.jks')) {
-      keyBuffers.push(entry.getData())
-    }
-    // Certificate files
-    if (name.endsWith('.cer') || name.endsWith('.crt') || name.endsWith('.p7b') || name.endsWith('.p7c')) {
-      certBuffers.push(entry.getData())
+    fileNames.push(entry.entryName)
+    const data = entry.getData()
+
+    if (CERT_EXTS.some(e => name.endsWith(e))) {
+      certBuffers.push(data)
+    } else if (KEY_EXTS.some(e => name.endsWith(e))) {
+      keyBuffers.push(data)
+    } else {
+      // Unknown extension — try as key buffer (jkurwa will reject if invalid)
+      otherBuffers.push(data)
     }
   }
 
-  return { keyBuffers, certBuffers }
+  // If no explicit key files found, try all "other" files as keys
+  const finalKeyBuffers = keyBuffers.length > 0
+    ? keyBuffers
+    : otherBuffers
+
+  if (finalKeyBuffers.length === 0) {
+    throw new Error(
+      `No key files found inside ZIP container. Files found: ${fileNames.join(', ') || '(empty)'}`
+    )
+  }
+
+  return { keyBuffers: finalKeyBuffers, certBuffers, fileNames }
 }
 
 /**
@@ -70,9 +95,8 @@ function loadBox(pfxBuffer: Buffer, password: string): InstanceType<typeof jk.Bo
   const box = new jk.Box({ algo })
 
   if (isZip(pfxBuffer)) {
-    // .ZS2 / .ZS3 — ZIP container with Key-6.dat + cert.cer inside
+    // .ZS2 / .ZS3 / .zip — ZIP container with Key-6.dat + cert.cer inside
     const { keyBuffers, certBuffers } = extractFromZip(pfxBuffer)
-    if (keyBuffers.length === 0) throw new Error('No key files found inside ZIP container')
     box.loadMaterial([{ keyBuffers, certBuffers, password }])
   } else {
     // Direct .pfx / .p12 / .dat / .jks

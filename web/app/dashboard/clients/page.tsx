@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
+import ClientDeleteButton from './client-delete-button'
 
 export default async function ClientsPage() {
   const supabase = await createClient()
@@ -82,10 +83,10 @@ export default async function ClientsPage() {
             const lastSync = syncMap.get(client.id)
 
             return (
-              <li key={client.id}>
+              <li key={client.id} className="group flex items-center gap-2">
                 <Link
                   href={`/dashboard/client/${client.id}`}
-                  className="flex items-center justify-between bg-white rounded-xl border border-gray-200 px-6 py-4 hover:border-blue-300 hover:shadow-sm transition group"
+                  className="flex-1 flex items-center justify-between bg-white rounded-xl border border-gray-200 px-6 py-4 hover:border-blue-300 hover:shadow-sm transition"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
@@ -115,6 +116,7 @@ export default async function ClientsPage() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                   </svg>
                 </Link>
+                <ClientDeleteButton clientId={client.id} clientName={client.name} />
               </li>
             )
           })}

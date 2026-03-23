@@ -6,6 +6,7 @@ import BudgetCalculationsTable from '@/components/budget-calculations'
 import { MOCK_PROFILE, MOCK_BUDGET } from '@/lib/dps/mock-data'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
 import SyncButton from './sync-button'
+import DeleteButton from './delete-button'
 
 interface PageProps {
   params: Promise<{ id: string }>
@@ -72,6 +73,7 @@ export default async function ClientPage({ params }: PageProps) {
 
         <div className="flex flex-col items-end gap-2 mt-1">
           <div className="flex items-center gap-3">
+            <DeleteButton clientId={id} clientName={client.name} />
             <Link
               href={`/dashboard/client/${id}/settings`}
               className="text-sm text-gray-400 hover:text-gray-600"

@@ -63,7 +63,7 @@ export default function NewClientPage() {
     const json = await res.json()
 
     if (!res.ok) {
-      setError(json.error + (json.detail ? ': ' + json.detail : ''))
+      setError(json.error + (json.detail ? '\n' + json.detail : ''))
       return
     }
 

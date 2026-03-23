@@ -108,7 +108,7 @@ export default function ClientSettingsPage() {
     const json = await res.json()
 
     if (!res.ok) {
-      setKepError(json.error + (json.detail ? ': ' + json.detail : ''))
+      setKepError(json.error + (json.detail ? '\n' + json.detail : ''))
       return
     }
 

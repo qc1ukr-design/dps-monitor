@@ -156,27 +156,61 @@ function loadBoxFromDecrypted(kepDecrypted: string, password: string): InstanceT
 
 /**
  * Get the signing key from the box.
- * Falls back to any available key-cert pair if no explicit signing key found.
+ *
+ * Tries multiple strategies in order, because different KEP providers
+ * (monobank, Privat24, etc.) package keys and certs differently in PKCS#12:
+ *   1. Standard "sign" usage key
+ *   2. "enc" usage key as fallback (some single-key containers)
+ *   3. Any key that already has both priv + cert linked
+ *   4. Any key with priv, paired with first cert from box.certs store
+ *   5. Any key with cert (last resort)
  */
 function getSigningKey(box: InstanceType<typeof jk.Box>): {
   priv: unknown
   cert: InstanceType<typeof jk.Certificate>
 } {
-  try {
-    return box.keyFor('sign', undefined) as {
-      priv: unknown
-      cert: InstanceType<typeof jk.Certificate>
-    }
-  } catch {
-    const allKeys = (
-      box as unknown as {
-        keys: Array<{ priv: unknown; cert: InstanceType<typeof jk.Certificate> }>
-      }
-    ).keys
-    const complete = allKeys?.filter(k => k.priv && k.cert)
-    if (complete?.length) return complete[0]
-    throw new Error('No key-certificate pair found in KEP file')
+  type KeyEntry = { priv: unknown; cert: InstanceType<typeof jk.Certificate> }
+  type BoxInternal = {
+    keys: KeyEntry[]
+    certs: InstanceType<typeof jk.Certificate>[]
   }
+  const b = box as unknown as BoxInternal
+  const allKeys: KeyEntry[] = b.keys ?? []
+  const allCerts: InstanceType<typeof jk.Certificate>[] = b.certs ?? []
+
+  // 1. Standard signing key
+  try {
+    const k = box.keyFor('sign', undefined) as KeyEntry
+    if (k?.priv && k?.cert) return k
+  } catch { /* continue */ }
+
+  // 2. Encryption key (some providers issue only one key for both purposes)
+  try {
+    const k = box.keyFor('enc', undefined) as KeyEntry
+    if (k?.priv && k?.cert) return k
+  } catch { /* continue */ }
+
+  // 3. Any key already linked to a cert
+  const withBoth = allKeys.find(k => k.priv && k.cert)
+  if (withBoth) return withBoth
+
+  // 4. Key with private key + any cert from the box cert store
+  //    (PKCS#12 sometimes stores key and cert in separate bags)
+  const withPriv = allKeys.find(k => k.priv)
+  if (withPriv) {
+    const cert = allCerts[0] ?? allKeys.find(k => k.cert)?.cert
+    if (cert) return { priv: withPriv.priv, cert }
+  }
+
+  // 5. Any key that at least has a cert (sign with whatever is available)
+  const withCert = allKeys.find(k => k.cert)
+  if (withCert) return withCert
+
+  throw new Error(
+    `Не знайдено пару ключ+сертифікат. ` +
+    `Ключів: ${allKeys.length}, сертифікатів: ${allCerts.length}. ` +
+    `Спробуйте завантажити .pfx разом із .cer файлом.`
+  )
 }
 
 /**

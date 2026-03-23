@@ -64,32 +64,41 @@ export async function POST(request: NextRequest) {
     }, { status: 500 })
   }
 
-  // 3. Call DPS API payer_card
-  const payerCardUrl = 'https://cabinet.tax.gov.ua/ws/public_api/payer_card'
-  let dpsResult
-  try {
-    const res = await fetch(payerCardUrl, {
-      method: 'GET',
-      headers: {
-        Authorization: authHeader,
-        Accept: 'application/json',
-      },
-      signal: AbortSignal.timeout(10000),
-      cache: 'no-store',
-    })
-    const text = await res.text()
-    let body: unknown
-    try { body = JSON.parse(text) } catch { body = text.substring(0, 500) }
-    dpsResult = { status: res.status, ok: res.ok, body }
-  } catch (e) {
-    dpsResult = { error: String(e) }
+  // 3. Call DPS API endpoints in parallel
+  const base = 'https://cabinet.tax.gov.ua/ws/public_api'
+  const year = new Date().getFullYear()
+
+  async function dpsFetch(url: string) {
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { Authorization: authHeader, Accept: 'application/json' },
+        signal: AbortSignal.timeout(10000),
+        cache: 'no-store',
+      })
+      const text = await res.text()
+      let body: unknown
+      try { body = JSON.parse(text) } catch { body = text.substring(0, 500) }
+      return { status: res.status, ok: res.ok, body }
+    } catch (e) {
+      return { error: String(e) }
+    }
   }
+
+  const [payerCard, budget2026, budget2025] = await Promise.all([
+    dpsFetch(`${base}/payer_card`),
+    dpsFetch(`${base}/ta/splatp?year=${year}`),
+    dpsFetch(`${base}/ta/splatp?year=${year - 1}`),
+  ])
 
   return NextResponse.json({
     kepInfo,
     taxIdUsed: taxId,
     authHeaderLength: authHeader.length,
-    authHeaderPreview: authHeader.substring(0, 40) + '...',
-    dps: dpsResult,
+    dps: {
+      payerCard,
+      [`budget_${year}`]: budget2026,
+      [`budget_${year - 1}`]: budget2025,
+    },
   })
 }

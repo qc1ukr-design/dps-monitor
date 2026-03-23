@@ -1,6 +1,4 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {
-  transpilePackages: ['@supabase/ssr'],
-};
+const nextConfig = {};
 
 export default nextConfig;

@@ -49,7 +49,8 @@ function extractFromZip(zipBuf: Buffer): {
   const entries = zip.getEntries()
 
   const CERT_EXTS = ['.cer', '.crt', '.p7b', '.p7c', '.pem']
-  const KEY_EXTS  = ['.dat', '.pfx', '.p12', '.jks', '.key']
+  // Ukrainian KEP formats: .ZS2/.ZS3 are PKCS#7 wrapped DSTU key containers
+  const KEY_EXTS  = ['.dat', '.pfx', '.p12', '.jks', '.key', '.zs2', '.zs3', '.zs1', '.sk']
 
   const keyBuffers: Buffer[] = []
   const certBuffers: Buffer[] = []

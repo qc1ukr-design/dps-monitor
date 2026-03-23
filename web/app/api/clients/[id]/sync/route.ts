@@ -112,6 +112,8 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
   // Upsert budget cache (normalize before storing)
   if (budgetResult.ok && budgetResult.body) {
     const normalized = normalizeBudget(budgetResult.body)
+    console.log('[sync] budget raw rows:', Array.isArray(budgetResult.body) ? (budgetResult.body as unknown[]).length : typeof budgetResult.body)
+    console.log('[sync] budget normalized rows:', normalized.calculations.length)
     const { error } = await supabase
       .from('dps_cache')
       .upsert({
@@ -122,7 +124,7 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
         fetched_at: now,
         is_mock: false,
       }, { onConflict: 'client_id,data_type' })
-    results.budget = { ok: true, error: error?.message }
+    results.budget = { ok: true, error: error?.message, _debug: { rawRows: Array.isArray(budgetResult.body) ? (budgetResult.body as unknown[]).length : 'not array', normalizedRows: normalized.calculations.length } }
   } else {
     results.budget = { ok: false, status: budgetResult.status, body: budgetResult.body }
   }

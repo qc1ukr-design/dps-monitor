@@ -28,17 +28,17 @@ export async function POST(request: NextRequest) {
   const { name, edrpou, dpsToken } = body as {
     name: string
     edrpou?: string
-    dpsToken: string
+    dpsToken?: string
   }
 
-  if (!name || !dpsToken) {
-    return NextResponse.json({ error: 'name and dpsToken are required' }, { status: 400 })
+  if (!name?.trim()) {
+    return NextResponse.json({ error: 'name is required' }, { status: 400 })
   }
 
   // Створюємо клієнта
   const { data: client, error: clientError } = await supabase
     .from('clients')
-    .insert({ user_id: user.id, name, edrpou: edrpou || null })
+    .insert({ user_id: user.id, name: name.trim(), edrpou: edrpou?.trim() || null })
     .select('id')
     .single()
 
@@ -46,16 +46,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: clientError?.message || 'Failed to create client' }, { status: 500 })
   }
 
-  // Шифруємо і зберігаємо токен ДПС
-  const tokenEncrypted = encrypt(dpsToken.trim())
-  const { error: tokenError } = await supabase
-    .from('api_tokens')
-    .insert({ client_id: client.id, user_id: user.id, token_encrypted: tokenEncrypted })
+  // Якщо передано DPS токен — шифруємо і зберігаємо (опціонально)
+  if (dpsToken?.trim()) {
+    const tokenEncrypted = encrypt(dpsToken.trim())
+    const { error: tokenError } = await supabase
+      .from('api_tokens')
+      .insert({ client_id: client.id, user_id: user.id, token_encrypted: tokenEncrypted })
 
-  if (tokenError) {
-    // Відкочуємо — видаляємо клієнта
-    await supabase.from('clients').delete().eq('id', client.id)
-    return NextResponse.json({ error: tokenError.message }, { status: 500 })
+    if (tokenError) {
+      await supabase.from('clients').delete().eq('id', client.id)
+      return NextResponse.json({ error: tokenError.message }, { status: 500 })
+    }
   }
 
   return NextResponse.json({ id: client.id }, { status: 201 })

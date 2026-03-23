@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto'
 import { signWithKep } from '@/lib/dps/signer'
+import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
 
 interface RouteParams {
   params: Promise<{ id: string }>
@@ -90,15 +91,16 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
   const now = new Date().toISOString()
   const results: Record<string, unknown> = {}
 
-  // Upsert profile cache
+  // Upsert profile cache (normalize before storing)
   if (profileResult.ok && profileResult.body) {
+    const normalized = normalizeProfile(profileResult.body)
     const { error } = await supabase
       .from('dps_cache')
       .upsert({
         client_id: id,
         user_id: user.id,
         data_type: 'profile',
-        data: profileResult.body,
+        data: normalized,
         fetched_at: now,
         is_mock: false,
       }, { onConflict: 'client_id,data_type' })
@@ -107,15 +109,16 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
     results.profile = { ok: false, status: profileResult.status, body: profileResult.body }
   }
 
-  // Upsert budget cache
+  // Upsert budget cache (normalize before storing)
   if (budgetResult.ok && budgetResult.body) {
+    const normalized = normalizeBudget(budgetResult.body)
     const { error } = await supabase
       .from('dps_cache')
       .upsert({
         client_id: id,
         user_id: user.id,
         data_type: 'budget',
-        data: budgetResult.body,
+        data: normalized,
         fetched_at: now,
         is_mock: false,
       }, { onConflict: 'client_id,data_type' })

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import TaxpayerProfileCard from '@/components/taxpayer-profile'
 import BudgetCalculationsTable from '@/components/budget-calculations'
 import { MOCK_PROFILE, MOCK_BUDGET } from '@/lib/dps/mock-data'
+import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
 import SyncButton from './sync-button'
 
 interface PageProps {
@@ -45,8 +46,8 @@ export default async function ClientPage({ params }: PageProps) {
   const profileCache = cacheRows?.find(r => r.data_type === 'profile')
   const budgetCache = cacheRows?.find(r => r.data_type === 'budget')
 
-  const profileData = profileCache?.data ?? MOCK_PROFILE
-  const budgetData = budgetCache?.data ?? MOCK_BUDGET
+  const profileData = profileCache?.data ? normalizeProfile(profileCache.data) : MOCK_PROFILE
+  const budgetData = budgetCache?.data ? normalizeBudget(budgetCache.data) : MOCK_BUDGET
   const profileIsMock = !profileCache || profileCache.is_mock
   const budgetIsMock = !budgetCache || budgetCache.is_mock
 

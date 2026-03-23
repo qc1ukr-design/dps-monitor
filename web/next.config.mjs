@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {};
+const nextConfig = {
+  serverExternalPackages: ['jkurwa', 'gost89'],
+}
 
-export default nextConfig;
+export default nextConfig

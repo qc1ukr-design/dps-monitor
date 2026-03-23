@@ -31,14 +31,22 @@ export default async function ClientPage({ params }: PageProps) {
 
   return (
     <div className="max-w-4xl mx-auto py-10 px-4 space-y-6">
-      <div>
-        <Link href="/dashboard/clients" className="text-sm text-gray-400 hover:text-gray-600">
-          ← Контрагенти
+      <div className="flex items-start justify-between">
+        <div>
+          <Link href="/dashboard/clients" className="text-sm text-gray-400 hover:text-gray-600">
+            ← Контрагенти
+          </Link>
+          <h1 className="text-2xl font-bold text-gray-900 mt-2">{client.name}</h1>
+          {client.edrpou && (
+            <p className="text-gray-500 text-sm">ЄДРПОУ: {client.edrpou}</p>
+          )}
+        </div>
+        <Link
+          href={`/dashboard/client/${id}/settings`}
+          className="text-sm text-gray-400 hover:text-gray-600 mt-1"
+        >
+          ⚙ Налаштування
         </Link>
-        <h1 className="text-2xl font-bold text-gray-900 mt-2">{client.name}</h1>
-        {client.edrpou && (
-          <p className="text-gray-500 text-sm">ЄДРПОУ: {client.edrpou}</p>
-        )}
       </div>
 
       <TaxpayerProfileCard profile={profileRes.data!} isMock={profileRes.isMock} />

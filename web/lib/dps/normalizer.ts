@@ -124,13 +124,14 @@ export function normalizeBudget(raw: unknown): BudgetCalculations {
   }
 
   // Flat array format: each element is a tax row
+  // DPS ws/public_api/ta/splatp fields: namePlt, shot, narah0, splbd0, nedoim0, perepl0, debtAll
   const calculations: BudgetRow[] = arr.map(row => ({
-    taxName: str(row.NAME_POD ?? row.taxName ?? row.name ?? row.NKPD_NAME ?? ''),
-    taxCode: str(row.KOD_POD ?? row.taxCode ?? row.code ?? row.NKPD ?? ''),
-    charged: num(row.SUM_NAR ?? row.charged ?? row.accrued ?? 0),
-    paid:    num(row.SUM_SPL ?? row.paid ?? 0),
-    debt:    num(row.SUM_BORG ?? row.debt ?? 0),
-    overpayment: num(row.SUM_PEREPLA ?? row.overpayment ?? 0),
+    taxName: str(row.namePlt ?? row.NAME_POD ?? row.taxName ?? row.name ?? row.NKPD_NAME ?? ''),
+    taxCode: str(row.shot   ?? row.KOD_POD  ?? row.taxCode ?? row.code ?? row.NKPD ?? ''),
+    charged: num(row.narah0 ?? row.narahEnd ?? row.SUM_NAR ?? row.charged ?? row.accrued ?? 0),
+    paid:    num(row.splbd0 ?? row.SUM_SPL  ?? row.paid ?? 0),
+    debt:    num(row.nedoim0 ?? row.debtAll ?? row.SUM_BORG ?? row.debt ?? 0),
+    overpayment: num(row.perepl0 ?? row.SUM_PEREPLA ?? row.overpayment ?? 0),
   })).filter(r => r.taxName || r.taxCode)
 
   return { calculations }

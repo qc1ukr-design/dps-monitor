@@ -8,6 +8,7 @@ export default async function ClientsPage() {
   const { data: clients } = await supabase
     .from('clients')
     .select('id, name, edrpou, created_at')
+    .eq('user_id', user!.id)
     .order('created_at', { ascending: false })
 
   // Load KEP status and last sync for all clients in parallel

@@ -11,6 +11,7 @@ export default async function DashboardPage() {
   const { data: clients } = await supabase
     .from('clients')
     .select('id, name, edrpou')
+    .eq('user_id', user.id)
     .order('created_at', { ascending: false })
     .limit(5)
 

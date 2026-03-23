@@ -8,8 +8,9 @@
  * Supports:
  * - .pfx / .p12 (PKCS#12)
  * - .jks (Java KeyStore)
- * - .dat / Key-6.dat (Ukrainian proprietaty format)
+ * - .dat / Key-6.dat (Ukrainian proprietary format)
  * - .ZS2 / .ZS3 etc. — ZIP containers with Key-6.dat + *.cer inside
+ * - Multiple separate files: key file(s) + cert file(s) uploaded together
  */
 
 // jkurwa / gost89 are CommonJS, loaded at runtime (serverExternalPackages in next.config)
@@ -30,6 +31,16 @@ export interface KepInfo {
   taxId: string
 }
 
+// File extension classification
+export const CERT_EXTS = ['.cer', '.crt', '.p7b', '.p7c', '.pem']
+export const KEY_EXTS  = ['.dat', '.pfx', '.p12', '.jks', '.key', '.zs2', '.zs3', '.zs1', '.sk']
+
+/** Get lowercase extension including the dot, e.g. ".pfx" */
+function getExt(filename: string): string {
+  const idx = filename.lastIndexOf('.')
+  return idx >= 0 ? filename.slice(idx).toLowerCase() : ''
+}
+
 /** Check if buffer is a ZIP file (magic bytes PK\x03\x04) */
 function isZip(buf: Buffer): boolean {
   return buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4B && buf[2] === 0x03 && buf[3] === 0x04
@@ -38,7 +49,6 @@ function isZip(buf: Buffer): boolean {
 /**
  * If the file is a ZIP container (.ZS2, .ZS3, .zip, etc.),
  * extract key buffers and cert buffers from it.
- * Returns file list for debugging.
  */
 function extractFromZip(zipBuf: Buffer): {
   keyBuffers: Buffer[]
@@ -47,10 +57,6 @@ function extractFromZip(zipBuf: Buffer): {
 } {
   const zip = new AdmZip(zipBuf)
   const entries = zip.getEntries()
-
-  const CERT_EXTS = ['.cer', '.crt', '.p7b', '.p7c', '.pem']
-  // Ukrainian KEP formats: .ZS2/.ZS3 are PKCS#7 wrapped DSTU key containers
-  const KEY_EXTS  = ['.dat', '.pfx', '.p12', '.jks', '.key', '.zs2', '.zs3', '.zs1', '.sk']
 
   const keyBuffers: Buffer[] = []
   const certBuffers: Buffer[] = []
@@ -68,15 +74,11 @@ function extractFromZip(zipBuf: Buffer): {
     } else if (KEY_EXTS.some(e => name.endsWith(e))) {
       keyBuffers.push(data)
     } else {
-      // Unknown extension — try as key buffer (jkurwa will reject if invalid)
       otherBuffers.push(data)
     }
   }
 
-  // If no explicit key files found, try all "other" files as keys
-  const finalKeyBuffers = keyBuffers.length > 0
-    ? keyBuffers
-    : otherBuffers
+  const finalKeyBuffers = keyBuffers.length > 0 ? keyBuffers : otherBuffers
 
   if (finalKeyBuffers.length === 0) {
     throw new Error(
@@ -88,7 +90,7 @@ function extractFromZip(zipBuf: Buffer): {
 }
 
 /**
- * Load a Box from a KEP file buffer + password.
+ * Load a Box from a single KEP file buffer + password.
  * Handles both direct files and ZIP containers.
  */
 function loadBox(pfxBuffer: Buffer, password: string): InstanceType<typeof jk.Box> {
@@ -96,11 +98,9 @@ function loadBox(pfxBuffer: Buffer, password: string): InstanceType<typeof jk.Bo
   const box = new jk.Box({ algo })
 
   if (isZip(pfxBuffer)) {
-    // .ZS2 / .ZS3 / .zip — ZIP container with Key-6.dat + cert.cer inside
     const { keyBuffers, certBuffers } = extractFromZip(pfxBuffer)
     box.loadMaterial([{ keyBuffers, certBuffers, password }])
   } else {
-    // Direct .pfx / .p12 / .dat / .jks
     box.loadMaterial([{ keyBuffers: [pfxBuffer], password }])
   }
 
@@ -108,16 +108,71 @@ function loadBox(pfxBuffer: Buffer, password: string): InstanceType<typeof jk.Bo
 }
 
 /**
+ * Load a Box from pre-separated key and cert file buffers.
+ * Used when user uploads .dat + .cer files separately.
+ */
+function loadBoxFromFiles(
+  keyBuffers: Buffer[],
+  certBuffers: Buffer[],
+  password: string
+): InstanceType<typeof jk.Box> {
+  const algo = gost89.compat.algos()
+  const box = new jk.Box({ algo })
+  box.loadMaterial([{ keyBuffers, certBuffers, password }])
+  return box
+}
+
+/**
+ * Load a Box from a decrypted KEP storage value.
+ *
+ * Handles two storage formats:
+ *   - Legacy: raw pfxBase64 string (single file)
+ *   - v2: JSON string { v: 2, files: Array<{ name: string, base64: string }> }
+ */
+function loadBoxFromDecrypted(kepDecrypted: string, password: string): InstanceType<typeof jk.Box> {
+  if (kepDecrypted.startsWith('{')) {
+    // v2 multi-file format
+    const { files } = JSON.parse(kepDecrypted) as {
+      v: number
+      files: Array<{ name: string; base64: string }>
+    }
+    const keyBuffers: Buffer[] = []
+    const certBuffers: Buffer[] = []
+    for (const f of files) {
+      const ext = getExt(f.name)
+      const buf = Buffer.from(f.base64, 'base64')
+      if (CERT_EXTS.includes(ext)) {
+        certBuffers.push(buf)
+      } else {
+        keyBuffers.push(buf)
+      }
+    }
+    return loadBoxFromFiles(keyBuffers, certBuffers, password)
+  } else {
+    // Legacy: single pfxBase64
+    return loadBox(Buffer.from(kepDecrypted, 'base64'), password)
+  }
+}
+
+/**
  * Get the signing key from the box.
  * Falls back to any available key-cert pair if no explicit signing key found.
  */
-function getSigningKey(box: InstanceType<typeof jk.Box>): { priv: unknown; cert: InstanceType<typeof jk.Certificate> } {
-  // Try the standard signing key first
+function getSigningKey(box: InstanceType<typeof jk.Box>): {
+  priv: unknown
+  cert: InstanceType<typeof jk.Certificate>
+} {
   try {
-    return box.keyFor('sign', undefined) as { priv: unknown; cert: InstanceType<typeof jk.Certificate> }
+    return box.keyFor('sign', undefined) as {
+      priv: unknown
+      cert: InstanceType<typeof jk.Certificate>
+    }
   } catch {
-    // Fall back: any key with a cert
-    const allKeys = (box as unknown as { keys: Array<{ priv: unknown; cert: InstanceType<typeof jk.Certificate> }> }).keys
+    const allKeys = (
+      box as unknown as {
+        keys: Array<{ priv: unknown; cert: InstanceType<typeof jk.Certificate> }>
+      }
+    ).keys
     const complete = allKeys?.filter(k => k.priv && k.cert)
     if (complete?.length) return complete[0]
     throw new Error('No key-certificate pair found in KEP file')
@@ -125,18 +180,13 @@ function getSigningKey(box: InstanceType<typeof jk.Box>): { priv: unknown; cert:
 }
 
 /**
- * Parse a KEP file and return info about the signing certificate.
+ * Extract KepInfo from a jkurwa certificate object.
  */
-export async function inspectKep(pfxBuffer: Buffer, password: string): Promise<KepInfo> {
-  const box = loadBox(pfxBuffer, password)
-  const keyInfo = getSigningKey(box)
-  const cert = keyInfo.cert
-
+function extractCertInfo(cert: InstanceType<typeof jk.Certificate>): KepInfo {
   const subj = cert.subject as Record<string, string>
   const validity = cert.validity as { notBefore: Date; notAfter: Date }
   const issuer = cert.issuer as Record<string, string>
 
-  // РНОКПП / ЄДРПОУ is usually in serialNumber field of subject
   const rawSerial = subj.serialNumber ?? ''
   const taxId = rawSerial
     .replace(/^(УНЗР|РНОКПП|ЄДРПОУ|TINUA-)/i, '')
@@ -144,10 +194,11 @@ export async function inspectKep(pfxBuffer: Buffer, password: string): Promise<K
 
   return {
     caName: issuer.organizationName ?? issuer.commonName ?? 'Невідомий АЦСК',
-    ownerName: [subj.givenName, subj.surname].filter(Boolean).join(' ')
-      || subj.commonName
-      || subj.organizationName
-      || 'Невідомо',
+    ownerName:
+      [subj.givenName, subj.surname].filter(Boolean).join(' ') ||
+      subj.commonName ||
+      subj.organizationName ||
+      'Невідомо',
     serial: (cert.serial as Buffer | undefined)?.toString('hex') ?? '',
     validFrom: validity?.notBefore?.toISOString() ?? '',
     validTo: validity?.notAfter?.toISOString() ?? '',
@@ -155,11 +206,62 @@ export async function inspectKep(pfxBuffer: Buffer, password: string): Promise<K
   }
 }
 
+// ─── Public API ──────────────────────────────────────────────────────────────
+
 /**
- * Sign `data` with the KEP private key.
- * Returns base64-encoded CMS/PKCS#7 SignedData → Authorization header for DPS.
+ * Parse a single KEP file buffer and return info about the signing certificate.
  */
-export async function signWithKep(pfxBuffer: Buffer, password: string, data: string | Buffer): Promise<string> {
+export async function inspectKep(pfxBuffer: Buffer, password: string): Promise<KepInfo> {
+  const box = loadBox(pfxBuffer, password)
+  const keyInfo = getSigningKey(box)
+  return extractCertInfo(keyInfo.cert)
+}
+
+/**
+ * Parse multiple KEP file buffers (key files + cert files separately) and return cert info.
+ * Use when the user uploads .dat + .cer / .crt files together.
+ */
+export async function inspectKepFiles(
+  keyBuffers: Buffer[],
+  certBuffers: Buffer[],
+  password: string
+): Promise<KepInfo> {
+  const box = loadBoxFromFiles(keyBuffers, certBuffers, password)
+  const keyInfo = getSigningKey(box)
+  return extractCertInfo(keyInfo.cert)
+}
+
+/**
+ * Sign `data` using KEP stored as a decrypted DB value.
+ * Handles both legacy (raw pfxBase64) and v2 (JSON multi-file) formats.
+ * This is the preferred function to use from API routes after decrypting from DB.
+ */
+export async function signWithKepDecrypted(
+  kepDecrypted: string,
+  password: string,
+  data: string | Buffer
+): Promise<string> {
+  const box = loadBoxFromDecrypted(kepDecrypted, password)
+  const dataBuffer = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8')
+
+  const message = await box.sign(dataBuffer, undefined, null, {
+    tsp: false,
+    detached: false,
+  })
+
+  const asn1 = (message as { as_asn1: () => Buffer }).as_asn1()
+  return asn1.toString('base64')
+}
+
+/**
+ * Sign `data` with the KEP private key from a single buffer.
+ * @deprecated Prefer signWithKepDecrypted when loading KEP from DB.
+ */
+export async function signWithKep(
+  pfxBuffer: Buffer,
+  password: string,
+  data: string | Buffer
+): Promise<string> {
   const box = loadBox(pfxBuffer, password)
   const dataBuffer = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8')
 

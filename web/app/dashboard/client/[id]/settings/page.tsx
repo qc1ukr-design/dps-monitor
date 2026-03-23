@@ -25,8 +25,11 @@ export default function ClientSettingsPage() {
   const [kepLoading, setKepLoading] = useState(false)
   const [error, setError] = useState('')
   const [kepError, setKepError] = useState('')
-  const [success, setSuccess] = useState(false)
-  const [kepSuccess, setKepSuccess] = useState<KepStatus | null>(null)
+  const [tokenSuccess, setTokenSuccess] = useState(false)
+  // 'idle' | 'uploaded' — tracks post-upload UI state
+  const [kepUploadedInfo, setKepUploadedInfo] = useState<KepStatus | null>(null)
+  const [showReplaceForm, setShowReplaceForm] = useState(false)
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
 
   // Load existing KEP status
   useEffect(() => {
@@ -39,7 +42,7 @@ export default function ClientSettingsPage() {
   async function handleUpdateToken(e: React.FormEvent) {
     e.preventDefault()
     setError('')
-    setSuccess(false)
+    setTokenSuccess(false)
     setLoading(true)
 
     const res = await fetch(`/api/clients/${id}`, {
@@ -56,38 +59,48 @@ export default function ClientSettingsPage() {
       return
     }
 
-    setSuccess(true)
+    setTokenSuccess(true)
     setDpsToken('')
-    setTimeout(() => setSuccess(false), 3000)
+    setTimeout(() => setTokenSuccess(false), 4000)
   }
 
   async function handleUploadKep(e: React.FormEvent) {
     e.preventDefault()
     setKepError('')
-    setKepSuccess(null)
 
-    const file = fileRef.current?.files?.[0]
-    if (!file) { setKepError('Оберіть файл KEP (.pfx, .jks, .dat)'); return }
-    if (!kepPassword) { setKepError('Введіть пароль KEP'); return }
+    const files = fileRef.current?.files
+    if (!files || files.length === 0) {
+      setKepError('Оберіть файл(и) KEP')
+      return
+    }
+    if (!kepPassword) {
+      setKepError('Введіть пароль KEP')
+      return
+    }
 
     setKepLoading(true)
 
-    // Read file as base64
-    const pfxBase64 = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => {
-        const result = reader.result as string
-        // result is "data:...;base64,XXXX" — extract only base64 part
-        resolve(result.split(',')[1])
-      }
-      reader.onerror = reject
-      reader.readAsDataURL(file)
-    })
+    // Read all selected files as base64
+    const filePayload = await Promise.all(
+      Array.from(files).map(
+        (file) =>
+          new Promise<{ name: string; base64: string }>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () =>
+              resolve({
+                name: file.name,
+                base64: (reader.result as string).split(',')[1],
+              })
+            reader.onerror = reject
+            reader.readAsDataURL(file)
+          })
+      )
+    )
 
     const res = await fetch(`/api/clients/${id}/kep`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pfxBase64, password: kepPassword }),
+      body: JSON.stringify({ files: filePayload, password: kepPassword }),
     })
 
     setKepLoading(false)
@@ -99,9 +112,12 @@ export default function ClientSettingsPage() {
     }
 
     const info = json.kepInfo as Omit<KepStatus, 'configured'>
-    setKepSuccess(info as KepStatus)
-    setKepStatus({ ...info, configured: true })
+    const newStatus: KepStatus = { ...info, configured: true }
+    setKepStatus(newStatus)
+    setKepUploadedInfo(newStatus)
+    setShowReplaceForm(false)
     setKepPassword('')
+    setSelectedFiles([])
     if (fileRef.current) fileRef.current.value = ''
   }
 
@@ -117,6 +133,9 @@ export default function ClientSettingsPage() {
     }
   }
 
+  // Should we show the upload form?
+  const showUploadForm = !kepStatus?.configured || showReplaceForm || kepUploadedInfo === null && !kepStatus?.configured
+
   return (
     <div className="max-w-lg mx-auto py-10 px-4 space-y-6">
       <div>
@@ -126,16 +145,51 @@ export default function ClientSettingsPage() {
         <h1 className="text-2xl font-bold text-gray-900 mt-2">Налаштування контрагента</h1>
       </div>
 
-      {/* KEP upload section */}
+      {/* KEP section */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
         <div>
           <h2 className="font-semibold text-gray-900">Ключ електронного підпису (KEP)</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            Файл .pfx, .jks або .dat + пароль. Зберігаються тільки зашифровані.
+            Зберігається тільки у зашифрованому вигляді на вашому акаунті.
           </p>
         </div>
 
-        {kepStatus?.configured && !kepSuccess && (
+        {/* ── Success state after upload ── */}
+        {kepUploadedInfo && !showReplaceForm && (
+          <div className="bg-green-50 border border-green-200 rounded-xl px-5 py-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <svg className="w-5 h-5 text-green-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              <span className="font-semibold text-green-800">Ключ успішно завантажено!</span>
+            </div>
+            <div className="text-sm text-green-700 space-y-0.5">
+              {kepUploadedInfo.ownerName && <div>Власник: <span className="font-medium">{kepUploadedInfo.ownerName}</span></div>}
+              {kepUploadedInfo.caName && <div>АЦСК: {kepUploadedInfo.caName}</div>}
+              {kepUploadedInfo.taxId && <div>Податковий номер: {kepUploadedInfo.taxId}</div>}
+              {kepUploadedInfo.validTo && (
+                <div>Дійсний до: {new Date(kepUploadedInfo.validTo).toLocaleDateString('uk-UA')}</div>
+              )}
+            </div>
+            <div className="flex items-center gap-3 pt-1">
+              <Link
+                href={`/dashboard/client/${id}`}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition"
+              >
+                Синхронізувати дані →
+              </Link>
+              <button
+                onClick={() => setShowReplaceForm(true)}
+                className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2"
+              >
+                Замінити ключ
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Existing KEP info (no fresh upload) ── */}
+        {kepStatus?.configured && !kepUploadedInfo && !showReplaceForm && (
           <div className="bg-blue-50 rounded-lg px-4 py-3 text-sm space-y-1">
             <div className="font-medium text-blue-800">KEP підключено</div>
             {kepStatus.ownerName && <div className="text-blue-700">Власник: {kepStatus.ownerName}</div>}
@@ -146,58 +200,88 @@ export default function ClientSettingsPage() {
                 Дійсний до: {new Date(kepStatus.validTo).toLocaleDateString('uk-UA')}
               </div>
             )}
+            <button
+              onClick={() => setShowReplaceForm(true)}
+              className="mt-2 text-xs text-blue-500 hover:text-blue-700 underline underline-offset-2"
+            >
+              Замінити ключ
+            </button>
           </div>
         )}
 
-        {kepSuccess && (
-          <div className="bg-green-50 rounded-lg px-4 py-3 text-sm space-y-1">
-            <div className="font-medium text-green-800">KEP успішно збережено!</div>
-            {(kepSuccess as unknown as KepStatus & { ownerName?: string }).ownerName && (
-              <div className="text-green-700">Власник: {(kepSuccess as unknown as KepStatus & { ownerName?: string }).ownerName}</div>
+        {/* ── Upload form ── */}
+        {(showUploadForm || showReplaceForm) && (
+          <form onSubmit={handleUploadKep} className="space-y-4">
+            {showReplaceForm && (
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-gray-700">Завантажити новий ключ</span>
+                <button
+                  type="button"
+                  onClick={() => { setShowReplaceForm(false); setKepError('') }}
+                  className="text-xs text-gray-400 hover:text-gray-600"
+                >
+                  ✕ Скасувати
+                </button>
+              </div>
             )}
-            {kepStatus?.caName && <div className="text-green-600">АЦСК: {kepStatus.caName}</div>}
-            {kepStatus?.taxId && <div className="text-green-600">Податковий номер: {kepStatus.taxId}</div>}
-          </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Файл(и) KEP <span className="text-red-500">*</span>
+              </label>
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                accept=".pfx,.p12,.jks,.dat,.cer,.crt,.zs2,.zs3,.zs1,.sk,.zip"
+                onChange={(e) => setSelectedFiles(Array.from(e.target.files ?? []))}
+                className="w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium hover:file:bg-blue-100 transition"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Підтримується: .pfx, .p12, .dat, .ZS2, .ZS3, ZIP-архів.
+                Якщо ключ та сертифікат у різних файлах — оберіть їх одночасно.
+              </p>
+              {selectedFiles.length > 1 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {selectedFiles.map((f, i) => (
+                    <span key={i} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                      {f.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Пароль <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="password"
+                value={kepPassword}
+                onChange={(e) => setKepPassword(e.target.value)}
+                placeholder="Пароль від KEP"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            {kepError && (
+              <div className="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-lg">{kepError}</div>
+            )}
+
+            <button
+              type="submit"
+              disabled={kepLoading}
+              className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-60 transition"
+            >
+              {kepLoading
+                ? 'Завантаження і перевірка...'
+                : kepStatus?.configured
+                ? 'Замінити KEP'
+                : 'Зберегти KEP'}
+            </button>
+          </form>
         )}
-
-        <form onSubmit={handleUploadKep} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Файл KEP <span className="text-red-500">*</span>
-            </label>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".pfx,.p12,.jks,.dat,.cer"
-              className="w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium hover:file:bg-blue-100 transition"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Пароль <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="password"
-              value={kepPassword}
-              onChange={(e) => setKepPassword(e.target.value)}
-              placeholder="Пароль від KEP"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          {kepError && (
-            <div className="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-lg">{kepError}</div>
-          )}
-
-          <button
-            type="submit"
-            disabled={kepLoading}
-            className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-60 transition"
-          >
-            {kepLoading ? 'Завантаження і перевірка...' : kepStatus?.configured ? 'Оновити KEP' : 'Зберегти KEP'}
-          </button>
-        </form>
       </div>
 
       {/* DPS UUID token (optional, legacy) */}
@@ -221,8 +305,11 @@ export default function ClientSettingsPage() {
         {error && (
           <div className="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-lg">{error}</div>
         )}
-        {success && (
-          <div className="bg-green-50 text-green-700 text-sm px-4 py-3 rounded-lg">
+        {tokenSuccess && (
+          <div className="bg-green-50 text-green-700 text-sm px-4 py-3 rounded-lg flex items-center gap-2">
+            <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
             Токен успішно оновлено!
           </div>
         )}

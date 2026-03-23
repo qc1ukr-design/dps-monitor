@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto'
-import { signWithKep } from '@/lib/dps/signer'
+import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
 
 interface RouteParams {
@@ -57,11 +57,10 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
   }
 
   // Decrypt KEP
-  let pfxBuffer: Buffer
+  let kepDecrypted: string
   let password: string
   try {
-    const pfxBase64 = decrypt(tokenRow.kep_encrypted)
-    pfxBuffer = Buffer.from(pfxBase64, 'base64')
+    kepDecrypted = decrypt(tokenRow.kep_encrypted)
     password = decrypt(tokenRow.kep_password_encrypted)
   } catch (e) {
     return NextResponse.json({ error: 'Failed to decrypt KEP', detail: String(e) }, { status: 500 })
@@ -72,10 +71,10 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: 'KEP tax ID not stored — re-upload KEP' }, { status: 400 })
   }
 
-  // Sign taxId
+  // Sign taxId (handles both legacy single-file and v2 multi-file formats)
   let authHeader: string
   try {
-    authHeader = await signWithKep(pfxBuffer, password, taxId)
+    authHeader = await signWithKepDecrypted(kepDecrypted, password, taxId)
   } catch (e) {
     return NextResponse.json({ error: 'Signing failed', detail: String(e) }, { status: 500 })
   }

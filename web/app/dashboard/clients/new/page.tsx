@@ -10,6 +10,7 @@ export default function NewClientPage() {
   const [edrpou, setEdrpou] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -31,8 +32,12 @@ export default function NewClientPage() {
     }
 
     const { id } = await res.json()
-    // Go to settings to upload KEP right away
-    router.push(`/dashboard/client/${id}/settings`)
+    setSuccess(true)
+
+    // Brief confirmation, then go to KEP setup
+    setTimeout(() => {
+      router.push(`/dashboard/client/${id}/settings`)
+    }, 1200)
   }
 
   return (
@@ -45,60 +50,72 @@ export default function NewClientPage() {
         <p className="text-gray-500 text-sm mt-1">Після додавання завантажте KEP для синхронізації з ДПС</p>
       </div>
 
-      <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Назва / ПІБ <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="ФОП Іванченко Олексій або ТОВ «Назва»"
-            required
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            ЄДРПОУ / РНОКПП
-          </label>
-          <input
-            type="text"
-            value={edrpou}
-            onChange={(e) => setEdrpou(e.target.value.replace(/\D/g, ''))}
-            placeholder="2858814822"
-            maxLength={10}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <p className="text-xs text-gray-400 mt-1">
-            Буде автоматично зчитано з KEP-сертифіката при завантаженні
-          </p>
-        </div>
-
-        {error && (
-          <div className="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-lg">
-            {error}
+      {success ? (
+        <div className="bg-green-50 border border-green-200 rounded-xl px-6 py-5 flex items-center gap-3">
+          <svg className="w-6 h-6 text-green-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+          <div>
+            <div className="font-semibold text-green-800">Клієнта успішно додано!</div>
+            <div className="text-sm text-green-600 mt-0.5">Перенаправляємо до підключення KEP…</div>
           </div>
-        )}
-
-        <div className="flex gap-3">
-          <button
-            type="submit"
-            disabled={loading || !name.trim()}
-            className="flex-1 bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-60 transition"
-          >
-            {loading ? 'Збереження...' : 'Додати та підключити KEP →'}
-          </button>
-          <Link
-            href="/dashboard/clients"
-            className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-600 border border-gray-300 hover:bg-gray-50 transition"
-          >
-            Скасувати
-          </Link>
         </div>
-      </form>
+      ) : (
+        <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Назва / ПІБ <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="ФОП Іванченко Олексій або ТОВ «Назва»"
+              required
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              ЄДРПОУ / РНОКПП
+            </label>
+            <input
+              type="text"
+              value={edrpou}
+              onChange={(e) => setEdrpou(e.target.value.replace(/\D/g, ''))}
+              placeholder="2858814822"
+              maxLength={10}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Буде автоматично зчитано з KEP-сертифіката при завантаженні
+            </p>
+          </div>
+
+          {error && (
+            <div className="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-lg">
+              {error}
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <button
+              type="submit"
+              disabled={loading || !name.trim()}
+              className="flex-1 bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-60 transition"
+            >
+              {loading ? 'Збереження...' : 'Додати та підключити KEP →'}
+            </button>
+            <Link
+              href="/dashboard/clients"
+              className="px-4 py-2.5 rounded-lg text-sm font-medium text-gray-600 border border-gray-300 hover:bg-gray-50 transition"
+            >
+              Скасувати
+            </Link>
+          </div>
+        </form>
+      )}
     </div>
   )
 }

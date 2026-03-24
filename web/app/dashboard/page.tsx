@@ -129,7 +129,7 @@ export default async function DashboardPage() {
     { icon: '🏢', title: 'Профіль платника', desc: 'Назва, ЄДРПОУ, статус', active: true },
     { icon: '💰', title: 'Розрахунки з бюджетом', desc: 'Борги, переплати, нарахування', active: true },
     { icon: '📥', title: 'Вхідна документація', desc: 'Листи та повідомлення від ДПС', active: true },
-    { icon: '📋', title: 'Звітність', desc: 'Статуси поданих звітів', active: false },
+    { icon: '📋', title: 'Звітність', desc: 'Статуси поданих звітів', active: true },
     { icon: '🔔', title: 'Алерти', desc: 'Нові борги та повідомлення', active: false },
     { icon: '📊', title: 'Excel-звіт', desc: 'Зведений звіт по всіх клієнтах', active: false },
   ]

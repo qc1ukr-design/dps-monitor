@@ -7,7 +7,7 @@
  * These functions convert that raw format to the app's internal types.
  * They also pass through data that is already in normalized format (for backwards compat).
  */
-import type { TaxpayerProfile, BudgetCalculations, BudgetRow, KvedEntry, IncomingDocument, DocumentsList } from './types'
+import type { TaxpayerProfile, BudgetCalculations, BudgetRow, KvedEntry, IncomingDocument, DocumentsList, TaxReport, ReportsList } from './types'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -251,4 +251,50 @@ function _mapDocumentRows(arr: Record<string, unknown>[]): IncomingDocument[] {
     fromOrg: str(row.orgName ?? row.fromOrg ?? row.ORG_NAME ?? row.FROM_ORG ?? ''),
     hasAttachments: !!(row.hasFiles ?? row.hasAttachments ?? row.HAS_FILES ?? false),
   }))
+}
+
+// ── Reports (Звітність) ─────────────────────────────────────────────────────
+
+function _mapReportStatus(code: unknown, text: unknown): TaxReport['status'] {
+  const s = String(code ?? text ?? '').toLowerCase()
+  if (s.includes('прийнят') || s === '1' || s === 'accepted') return 'accepted'
+  if (s.includes('відхилен') || s === '2' || s === 'rejected') return 'rejected'
+  if (s.includes('обробк') || s === '3' || s === 'processing') return 'processing'
+  return 'pending'
+}
+
+export function normalizeReports(raw: unknown): ReportsList {
+  // Already normalised?
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const r = raw as Record<string, unknown>
+    if (Array.isArray(r.reports)) return raw as ReportsList
+    // { count, data } shape
+    if (Array.isArray(r.data)) {
+      const reports = _mapReportRows(r.data as Record<string, unknown>[])
+      return { reports, total: typeof r.count === 'number' ? r.count : reports.length }
+    }
+  }
+  if (Array.isArray(raw) && raw.length > 0) {
+    const reports = _mapReportRows(raw as Record<string, unknown>[])
+    return { reports, total: reports.length }
+  }
+  return { reports: [], total: 0 }
+}
+
+function _mapReportRows(arr: Record<string, unknown>[]): TaxReport[] {
+  return arr.map((row, idx) => {
+    const statusText = str(
+      row.statusName ?? row.status_name ?? row.STATUS_NAME ?? row.status ?? row.STATUS ?? ''
+    )
+    return {
+      id: str(row.id ?? row.docId ?? row.ID ?? String(idx)),
+      name: str(row.name ?? row.docName ?? row.DOC_NAME ?? row.zvit_name ?? row.ZVIT_NAME ?? ''),
+      formCode: str(row.formCode ?? row.form_code ?? row.FORM_CODE ?? row.kod_formy ?? row.KOD_FORMY ?? ''),
+      period: str(row.period ?? row.zvit_period ?? row.ZVIT_PERIOD ?? row.periodName ?? row.PERIOD_NAME ?? ''),
+      submittedAt: str(row.submittedAt ?? row.date_sub ?? row.DATE_SUB ?? row.docDate ?? row.DOC_DATE ?? ''),
+      status: _mapReportStatus(row.statusCode ?? row.STATUS_CODE, statusText),
+      statusText: statusText || 'Невідомо',
+      regNumber: str(row.regNumber ?? row.reg_num ?? row.REG_NUM ?? row.docNumber ?? row.DOC_NUMBER ?? ''),
+    }
+  })
 }

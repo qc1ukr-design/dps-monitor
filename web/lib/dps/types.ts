@@ -50,3 +50,19 @@ export interface DocumentsList {
   documents: IncomingDocument[]
   total: number
 }
+
+export interface TaxReport {
+  id: string
+  name: string           // Назва звіту
+  formCode: string       // Код форми (напр. F0103408)
+  period: string         // Звітний період (напр. "I квартал 2025")
+  submittedAt: string    // Дата подачі
+  status: 'accepted' | 'rejected' | 'processing' | 'pending'
+  statusText: string     // Текст статусу з DPS
+  regNumber: string      // Реєстраційний номер
+}
+
+export interface ReportsList {
+  reports: TaxReport[]
+  total: number
+}

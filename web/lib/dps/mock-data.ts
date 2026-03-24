@@ -1,4 +1,4 @@
-import type { TaxpayerProfile, BudgetCalculations, DocumentsList } from './types'
+import type { TaxpayerProfile, BudgetCalculations, DocumentsList, ReportsList } from './types'
 
 export const MOCK_PROFILE: TaxpayerProfile = {
   name: 'ТОВ «Приклад»',
@@ -47,6 +47,72 @@ export const MOCK_DOCUMENTS: DocumentsList = {
       status: 'answered',
       fromOrg: 'ГУ ДПС у м. Київ',
       hasAttachments: true,
+    },
+  ],
+}
+
+export const MOCK_REPORTS: ReportsList = {
+  total: 6,
+  reports: [
+    {
+      id: 'rep-001',
+      name: 'Податкова декларація платника єдиного податку',
+      formCode: 'F0103408',
+      period: 'I квартал 2026',
+      submittedAt: '2026-04-15',
+      status: 'accepted',
+      statusText: 'Прийнято',
+      regNumber: '9300123456',
+    },
+    {
+      id: 'rep-002',
+      name: 'Звіт про суми нарахованого доходу застрахованих осіб (ЄСВ)',
+      formCode: 'J0500107',
+      period: 'I квартал 2026',
+      submittedAt: '2026-04-14',
+      status: 'accepted',
+      statusText: 'Прийнято',
+      regNumber: '9300112233',
+    },
+    {
+      id: 'rep-003',
+      name: 'Податкова декларація платника єдиного податку',
+      formCode: 'F0103408',
+      period: 'IV квартал 2025',
+      submittedAt: '2026-01-16',
+      status: 'accepted',
+      statusText: 'Прийнято',
+      regNumber: '9200987654',
+    },
+    {
+      id: 'rep-004',
+      name: 'Звіт про суми нарахованого доходу застрахованих осіб (ЄСВ)',
+      formCode: 'J0500107',
+      period: 'IV квартал 2025',
+      submittedAt: '2026-01-14',
+      status: 'accepted',
+      statusText: 'Прийнято',
+      regNumber: '9200976543',
+    },
+    {
+      id: 'rep-005',
+      name: 'Податкова декларація платника єдиного податку',
+      formCode: 'F0103408',
+      period: 'III квартал 2025',
+      submittedAt: '2025-10-13',
+      status: 'accepted',
+      statusText: 'Прийнято',
+      regNumber: '9100654321',
+    },
+    {
+      id: 'rep-006',
+      name: 'Звіт про суми нарахованого доходу застрахованих осіб (ЄСВ)',
+      formCode: 'J0500107',
+      period: 'III квартал 2025',
+      submittedAt: '2025-10-12',
+      status: 'rejected',
+      statusText: 'Відхилено — помилки оформлення',
+      regNumber: '9100643210',
     },
   ],
 }

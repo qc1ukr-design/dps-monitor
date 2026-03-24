@@ -51,23 +51,44 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
   const taxId = tokenRow.kep_tax_id?.trim() ?? ''
   const authHeader = await signWithKepDecrypted(kepDecrypted, password, taxId)
 
-  const candidates = [
-    'corr/correspondence',
-    'corr/inbox',
-    'corr/outbox',
-    'payer/corr',
-    'inbox',
-    'mail/inbox',
-    'docs/in',
-    'corr',
-    'letters/inbox',
-    'corr/correspondence?page=0&limit=10',
+  const rnocpp = taxId
+
+  // Try GET candidates
+  const getCandidates = [
+    `corr/correspondence?rnocpp=${rnocpp}&page=0&limit=10`,
+    `corr/correspondence?tin=${rnocpp}&page=0&limit=10`,
+    `corr/correspondence?dateFrom=2025-01-01&dateTo=2026-12-31`,
+    `payer/corr?rnocpp=${rnocpp}`,
+    `payer/messages?rnocpp=${rnocpp}`,
+    `inbox?rnocpp=${rnocpp}`,
   ]
 
-  const results: Record<string, unknown> = {}
-  for (const ep of candidates) {
-    results[ep] = await tryEndpoint(ep, authHeader)
+  // Try POST candidates
+  async function tryPost(endpoint: string, body: Record<string, unknown>) {
+    try {
+      const res = await fetch(`${DPS_BASE}/${endpoint}`, {
+        method: 'POST',
+        headers: { Authorization: authHeader, Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(8000),
+        cache: 'no-store',
+      })
+      const text = await res.text()
+      let body2: unknown
+      try { body2 = JSON.parse(text) } catch { body2 = text.substring(0, 200) }
+      return { status: res.status, ok: res.ok, bodyPreview: JSON.stringify(body2).substring(0, 300) }
+    } catch (e) {
+      return { error: String(e) }
+    }
   }
+
+  const results: Record<string, unknown> = {}
+  for (const ep of getCandidates) {
+    results['GET:' + ep] = await tryEndpoint(ep, authHeader)
+  }
+  results['POST:corr/correspondence'] = await tryPost('corr/correspondence', { rnocpp, page: 0, limit: 10 })
+  results['POST:corr/correspondence(tin)'] = await tryPost('corr/correspondence', { tin: rnocpp, page: 0, limit: 10 })
+  results['POST:inbox'] = await tryPost('inbox', { rnocpp })
 
   return NextResponse.json(results)
 }

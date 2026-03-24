@@ -40,7 +40,6 @@ function calcBudget(data: unknown): { totalDebt: number; totalOverpayment: numbe
 export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-
   if (!user) redirect('/login')
 
   // Fetch all clients
@@ -136,25 +135,7 @@ export default async function DashboardPage() {
   ]
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* ── Header ──────────────────────────────────────────────────────── */}
-      <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="text-xl font-bold text-gray-900">ДПС-Монітор</span>
-          <span className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full font-medium">MVP</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <Link href="/dashboard/clients" className="text-sm text-blue-600 hover:text-blue-800 font-medium">
-            Контрагенти
-          </Link>
-          <span className="text-sm text-gray-500">{user.email}</span>
-          <form action="/auth/signout" method="POST">
-            <button className="text-sm text-gray-500 hover:text-gray-700">Вийти</button>
-          </form>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
+    <div className="max-w-7xl mx-auto px-6 py-8 space-y-8">
 
         {/* ── Section 1: Summary cards ─────────────────────────────────── */}
         {hasClients && (
@@ -354,7 +335,6 @@ export default async function DashboardPage() {
           </div>
         </div>
 
-      </main>
     </div>
   )
 }

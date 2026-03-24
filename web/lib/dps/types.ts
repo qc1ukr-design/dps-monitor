@@ -1,3 +1,9 @@
+export interface KvedEntry {
+  code: string
+  name: string
+  isPrimary?: boolean
+}
+
 export interface TaxpayerProfile {
   name: string
   edrpou: string
@@ -6,6 +12,8 @@ export interface TaxpayerProfile {
   registrationDate: string
   taxAuthority: string
   accountingType: string
+  address?: string
+  kvedList?: KvedEntry[]
 }
 
 export interface BudgetRow {

@@ -7,7 +7,7 @@
  * These functions convert that raw format to the app's internal types.
  * They also pass through data that is already in normalized format (for backwards compat).
  */
-import type { TaxpayerProfile, BudgetCalculations, BudgetRow } from './types'
+import type { TaxpayerProfile, BudgetCalculations, BudgetRow, KvedEntry } from './types'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -79,6 +79,31 @@ export function normalizeProfile(raw: unknown): TaxpayerProfile {
       ? `Єдиний податок ${grup} група`
       : 'Не платник ПДВ'
 
+  // Extract address from various possible field names
+  const address = str(
+    v.ADRESS ?? v.ADDRESS ?? v.C_ADRESS ?? v.ADRES ?? v.C_ADRES_FULL ?? v.ADRESS_FACT ?? v.ADR_FACT
+  ) || undefined
+
+  // Extract KVEDs from groups with listValues
+  const kvedList: KvedEntry[] = []
+  for (const g of groups) {
+    const title = (g.title ?? '').toLowerCase()
+    if (title.includes('квед') || title.includes('kved') || title.includes('вид діяльності') || title.includes('вид господарськ')) {
+      if (Array.isArray(g.listValues)) {
+        for (const item of g.listValues as Record<string, unknown>[]) {
+          const code = str(item.KOD_KVED ?? item.CODE_KVED ?? item.KOD ?? item.code ?? item.KVED_CODE ?? '')
+          const name = str(item.NAME_KVED ?? item.NAME ?? item.name ?? item.KVED_NAME ?? '')
+          const isPrimary = item.OZNAKA === '1' || item.OZNAKA === 1 || item.IS_PRIMARY === true || item.MAIN === '1'
+          if (code || name) kvedList.push({ code, name, isPrimary: !!isPrimary })
+        }
+      }
+    }
+  }
+  // Also try top-level values for single KVED
+  if (kvedList.length === 0 && (v.KOD_KVED || v.NAME_KVED)) {
+    kvedList.push({ code: str(v.KOD_KVED), name: str(v.NAME_KVED) })
+  }
+
   return {
     name: str(v.FULL_NAME) || str(v.TIN),
     edrpou: str(v.EDRPOU) || str(v.TIN),
@@ -87,6 +112,8 @@ export function normalizeProfile(raw: unknown): TaxpayerProfile {
     registrationDate: str(v.D_REG_STI),
     taxAuthority: str(v.C_STI_MAIN_NAME),
     accountingType,
+    address,
+    kvedList: kvedList.length > 0 ? kvedList : undefined,
   }
 }
 

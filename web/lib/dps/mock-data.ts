@@ -8,6 +8,11 @@ export const MOCK_PROFILE: TaxpayerProfile = {
   registrationDate: '2015-03-10',
   taxAuthority: 'ГУ ДПС у м. Київ',
   accountingType: 'Загальна система оподаткування',
+  address: 'м. Київ, вул. Хрещатик, 1',
+  kvedList: [
+    { code: '62.01', name: 'Комп\'ютерне програмування', isPrimary: true },
+    { code: '62.02', name: 'Консультування з питань інформатизації' },
+  ],
 }
 
 export const MOCK_BUDGET: BudgetCalculations = {

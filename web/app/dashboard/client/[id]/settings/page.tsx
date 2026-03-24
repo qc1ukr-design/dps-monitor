@@ -108,7 +108,18 @@ export default function ClientSettingsPage() {
     const json = await res.json()
 
     if (!res.ok) {
-      setKepError(json.error + (json.detail ? '\n' + json.detail : ''))
+      const detail = json.detail ?? ''
+      if (detail.includes('NO_CERT') || detail.includes('сертифікатів: 0')) {
+        setKepError(
+          'У файлі .pfx відсутній сертифікат — тільки приватний ключ.\n\n' +
+          'Це типово для monobank КЕП. Потрібно завантажити ще й файл сертифіката (.cer):\n' +
+          '1. Додаток monobank → КЕП → «Завантажити сертифікат»\n' +
+          '2. Або зверніться до ЦСК, що видав КЕП\n\n' +
+          'Виберіть обидва файли (.pfx + .cer) одночасно і спробуйте знову.'
+        )
+      } else {
+        setKepError(json.error + (detail ? '\n' + detail : ''))
+      }
       return
     }
 

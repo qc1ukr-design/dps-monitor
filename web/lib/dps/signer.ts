@@ -330,9 +330,7 @@ function getSigningKey(box: InstanceType<typeof jk.Box>): {
   if (withCert) return withCert
 
   throw new Error(
-    `Не знайдено пару ключ+сертифікат. ` +
-    `Ключів: ${allKeys.length}, сертифікатів: ${allCerts.length}. ` +
-    `Спробуйте завантажити .pfx разом із .cer файлом.`
+    `NO_CERT:Ключів: ${allKeys.length}, сертифікатів: ${allCerts.length}`
   )
 }
 

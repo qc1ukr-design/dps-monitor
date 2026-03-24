@@ -79,29 +79,39 @@ export function normalizeProfile(raw: unknown): TaxpayerProfile {
       ? `Єдиний податок ${grup} група`
       : 'Не платник ПДВ'
 
-  // Extract address from various possible field names
+  // Extract address — DPS returns it as ADR_NS in "Реєстраційні дані" group
   const address = str(
-    v.ADRESS ?? v.ADDRESS ?? v.C_ADRESS ?? v.ADRES ?? v.C_ADRES_FULL ?? v.ADRESS_FACT ?? v.ADR_FACT
+    v.ADR_NS ?? v.ADRESS ?? v.ADDRESS ?? v.C_ADRESS ?? v.ADRES ?? v.C_ADRES_FULL ?? v.ADR_FACT
   ) || undefined
 
-  // Extract KVEDs from groups with listValues
+  // Extract KVEDs from "Види діяльності" group (listValues)
+  // DPS fields: KVED (code, may have leading underscore), KVED_NAME, IS_MAIN (1 = primary)
   const kvedList: KvedEntry[] = []
   for (const g of groups) {
     const title = (g.title ?? '').toLowerCase()
-    if (title.includes('квед') || title.includes('kved') || title.includes('вид діяльності') || title.includes('вид господарськ')) {
+    if (
+      title.includes('види діяльності') ||
+      title.includes('вид діяльності') ||
+      title.includes('квед') ||
+      title.includes('kved')
+    ) {
       if (Array.isArray(g.listValues)) {
         for (const item of g.listValues as Record<string, unknown>[]) {
-          const code = str(item.KOD_KVED ?? item.CODE_KVED ?? item.KOD ?? item.code ?? item.KVED_CODE ?? '')
-          const name = str(item.NAME_KVED ?? item.NAME ?? item.name ?? item.KVED_NAME ?? '')
-          const isPrimary = item.OZNAKA === '1' || item.OZNAKA === 1 || item.IS_PRIMARY === true || item.MAIN === '1'
+          const rawCode = str(item.KVED ?? item.KOD_KVED ?? item.CODE_KVED ?? item.code ?? '')
+          const code = rawCode.replace(/^_+/, '') // strip leading underscores
+          const name = str(item.KVED_NAME ?? item.NAME_KVED ?? item.NAME ?? item.name ?? '')
+          const isPrimary = item.IS_MAIN === 1 || item.IS_MAIN === '1' ||
+                            item.OZNAKA === '1' || item.OZNAKA === 1 ||
+                            item.IS_PRIMARY === true
           if (code || name) kvedList.push({ code, name, isPrimary: !!isPrimary })
         }
       }
     }
   }
-  // Also try top-level values for single KVED
-  if (kvedList.length === 0 && (v.KOD_KVED || v.NAME_KVED)) {
-    kvedList.push({ code: str(v.KOD_KVED), name: str(v.NAME_KVED) })
+  // Fallback: single KVED from top-level values
+  if (kvedList.length === 0 && (v.KVED || v.KVED_NAME)) {
+    const code = str(v.KVED).replace(/^_+/, '')
+    kvedList.push({ code, name: str(v.KVED_NAME) })
   }
 
   return {

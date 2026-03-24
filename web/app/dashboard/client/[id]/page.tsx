@@ -106,6 +106,16 @@ export default async function ClientPage({ params }: PageProps) {
 
       <TaxpayerProfileCard profile={profileData} isMock={profileIsMock} />
       <BudgetCalculationsTable data={budgetData} isMock={budgetIsMock} />
+
+      <Link href={`/dashboard/client/${id}/documents`} className="block">
+        <div className="bg-white rounded-xl border border-gray-200 px-6 py-5 hover:border-blue-300 hover:shadow-sm transition flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">📥 Вхідна документація</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Листи та повідомлення від ДПС</p>
+          </div>
+          <span className="text-gray-400">→</span>
+        </div>
+      </Link>
     </div>
   )
 }

@@ -34,3 +34,19 @@ export interface DpsApiResponse<T> {
   error: string | null
   isMock: boolean
 }
+
+export interface IncomingDocument {
+  id: string
+  number: string
+  date: string
+  type: string
+  subject: string
+  status: 'new' | 'read' | 'answered'
+  fromOrg: string
+  hasAttachments: boolean
+}
+
+export interface DocumentsList {
+  documents: IncomingDocument[]
+  total: number
+}

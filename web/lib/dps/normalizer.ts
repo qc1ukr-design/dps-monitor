@@ -7,7 +7,7 @@
  * These functions convert that raw format to the app's internal types.
  * They also pass through data that is already in normalized format (for backwards compat).
  */
-import type { TaxpayerProfile, BudgetCalculations, BudgetRow, KvedEntry } from './types'
+import type { TaxpayerProfile, BudgetCalculations, BudgetRow, KvedEntry, IncomingDocument, DocumentsList } from './types'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -194,4 +194,61 @@ function _normalizeBudgetFromGroups(groups: DpsGroup[]): BudgetCalculations {
   }
 
   return { calculations }
+}
+
+// ── Documents (Correspondence) ─────────────────────────────────────────────
+
+/**
+ * Normalise DPS correspondence response → DocumentsList.
+ * DPS may return:
+ *   - { count: N, data: [{ id, docDate, docNumber, docName, docTypeName, orgName, statusCode, hasFiles }] }
+ *   - Array of document objects directly
+ *   - Already-normalised { documents: [...], total: N }
+ */
+export function normalizeDocuments(raw: unknown): DocumentsList {
+  // Already normalised?
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const r = raw as Record<string, unknown>
+    if (Array.isArray(r.documents)) {
+      return raw as DocumentsList
+    }
+  }
+
+  // Object with { count, data } shape
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const r = raw as Record<string, unknown>
+    if (Array.isArray(r.data)) {
+      const docs = _mapDocumentRows(r.data as Record<string, unknown>[])
+      return { documents: docs, total: typeof r.count === 'number' ? r.count : docs.length }
+    }
+  }
+
+  // Raw array
+  if (Array.isArray(raw) && raw.length > 0) {
+    const docs = _mapDocumentRows(raw as Record<string, unknown>[])
+    return { documents: docs, total: docs.length }
+  }
+
+  return { documents: [], total: 0 }
+}
+
+function _mapStatusCode(code: unknown): IncomingDocument['status'] {
+  const s = String(code ?? '')
+  if (s === '1') return 'new'
+  if (s === '2') return 'read'
+  if (s === '3') return 'answered'
+  return 'new'
+}
+
+function _mapDocumentRows(arr: Record<string, unknown>[]): IncomingDocument[] {
+  return arr.map((row, idx) => ({
+    id: str(row.id ?? row.docId ?? row.ID ?? String(idx)),
+    number: str(row.docNumber ?? row.number ?? row.DOC_NUMBER ?? row.NUM ?? ''),
+    date: str(row.docDate ?? row.date ?? row.DOC_DATE ?? row.DATE ?? ''),
+    type: str(row.docTypeName ?? row.type ?? row.DOC_TYPE_NAME ?? row.TYPE_NAME ?? ''),
+    subject: str(row.docName ?? row.subject ?? row.DOC_NAME ?? row.TITLE ?? ''),
+    status: _mapStatusCode(row.statusCode ?? row.status ?? row.STATUS_CODE ?? row.STATUS ?? '1'),
+    fromOrg: str(row.orgName ?? row.fromOrg ?? row.ORG_NAME ?? row.FROM_ORG ?? ''),
+    hasAttachments: !!(row.hasFiles ?? row.hasAttachments ?? row.HAS_FILES ?? false),
+  }))
 }

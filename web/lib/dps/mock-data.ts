@@ -1,4 +1,4 @@
-import type { TaxpayerProfile, BudgetCalculations } from './types'
+import type { TaxpayerProfile, BudgetCalculations, DocumentsList } from './types'
 
 export const MOCK_PROFILE: TaxpayerProfile = {
   name: 'ТОВ «Приклад»',
@@ -12,6 +12,42 @@ export const MOCK_PROFILE: TaxpayerProfile = {
   kvedList: [
     { code: '62.01', name: 'Комп\'ютерне програмування', isPrimary: true },
     { code: '62.02', name: 'Консультування з питань інформатизації' },
+  ],
+}
+
+export const MOCK_DOCUMENTS: DocumentsList = {
+  total: 3,
+  documents: [
+    {
+      id: 'doc-001',
+      number: '№ 123/456/7-89',
+      date: '2026-03-10',
+      type: 'Запит',
+      subject: 'Запит про надання пояснень щодо розбіжностей у звітності з ПДВ за IV квартал 2025 р.',
+      status: 'new',
+      fromOrg: 'ГУ ДПС у м. Київ',
+      hasAttachments: false,
+    },
+    {
+      id: 'doc-002',
+      number: '№ 98/765/4-32',
+      date: '2026-02-20',
+      type: 'Повідомлення',
+      subject: 'Повідомлення про результати камеральної перевірки декларації з податку на прибуток за 2025 р.',
+      status: 'read',
+      fromOrg: 'ДПС України',
+      hasAttachments: true,
+    },
+    {
+      id: 'doc-003',
+      number: '№ 11/222/3-44',
+      date: '2026-01-15',
+      type: 'Рішення',
+      subject: 'Рішення про застосування штрафних санкцій за несвоєчасне подання звітності',
+      status: 'answered',
+      fromOrg: 'ГУ ДПС у м. Київ',
+      hasAttachments: true,
+    },
   ],
 }
 

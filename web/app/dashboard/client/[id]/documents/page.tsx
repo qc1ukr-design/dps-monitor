@@ -116,11 +116,6 @@ export default async function DocumentsPage({ params }: PageProps) {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {isMock && (
-              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700 border border-amber-200">
-                Демо-дані
-              </span>
-            )}
             {!isMock && (
               <span className="text-sm text-gray-500">
                 Всього: {total}
@@ -132,38 +127,45 @@ export default async function DocumentsPage({ params }: PageProps) {
 
       {/* No-token notice */}
       {noToken && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl px-5 py-4 text-sm text-yellow-800">
-          <p className="font-medium mb-1">Токен ДПС не налаштовано</p>
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 text-sm text-amber-800">
+          <p className="font-semibold mb-1">📋 Токен ДПС не налаштовано</p>
           <p>
-            Для перегляду вхідних документів потрібен токен ДПС з розділу «Відкриті дані» в
-            електронному кабінеті. Додайте його у{' '}
-            <Link
-              href={`/dashboard/client/${id}/settings`}
-              className="underline font-medium hover:text-yellow-900"
-            >
+            Для перегляду вхідних документів потрібен UUID-токен з розділу{' '}
+            <strong>«Відкриті дані»</strong> в електронному кабінеті. Додайте його у{' '}
+            <Link href={`/dashboard/client/${id}/settings`} className="underline font-medium hover:text-amber-900">
               Налаштуваннях
             </Link>
-            .{' '}
-            Або відкрийте документи напряму в{' '}
-            <a
-              href="https://cabinet.tax.gov.ua"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline font-medium hover:text-yellow-900"
-            >
-              Електронному кабінеті ДПС
+            {' '}або відкрийте документи напряму в{' '}
+            <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
+              className="underline font-medium hover:text-amber-900">
+              Електронному кабінеті ДПС →
             </a>
-            .
           </p>
         </div>
       )}
 
-      {/* Documents table */}
-      {documents.length === 0 ? (
+      {/* Has token but fetch failed */}
+      {!noToken && isMock && (
+        <div className="bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-sm text-gray-700">
+          <p className="font-semibold mb-1">⚠️ Не вдалося завантажити документи</p>
+          <p>
+            ДПС кабінет тимчасово недоступний або токен застарів. Спробуйте пізніше або{' '}
+            <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
+              className="underline font-medium hover:text-gray-900">
+              відкрийте кабінет ДПС напряму →
+            </a>
+          </p>
+        </div>
+      )}
+
+      {/* Documents table — only show real data */}
+      {!isMock && documents.length === 0 && (
         <div className="bg-white rounded-xl border border-gray-200 px-6 py-12 text-center">
           <p className="text-gray-500 text-sm">Вхідних документів не знайдено</p>
         </div>
-      ) : (
+      )}
+
+      {!isMock && documents.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -209,3 +211,4 @@ export default async function DocumentsPage({ params }: PageProps) {
     </div>
   )
 }
+

@@ -48,7 +48,7 @@ export default async function AlertsPage() {
           <p className="text-4xl mb-3">🔔</p>
           <p className="font-semibold text-gray-700">Алертів поки немає</p>
           <p className="text-sm text-gray-400 mt-1">
-            Вони з'являться після першої нічної синхронізації
+            {`Вони з'являться після першої нічної синхронізації`}
           </p>
         </div>
       )}

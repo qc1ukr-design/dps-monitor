@@ -7,6 +7,13 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
+  // Unread alerts count
+  const { count: unreadCount } = await supabase
+    .from('alerts')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', user.id)
+    .eq('is_read', false)
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
@@ -21,6 +28,15 @@ export default async function DashboardLayout({ children }: { children: React.Re
           </Link>
         </div>
         <div className="flex items-center gap-4">
+          {/* Alerts bell */}
+          <Link href="/dashboard/alerts" className="relative flex items-center hover:opacity-80 transition">
+            <span className="text-xl">🔔</span>
+            {!!unreadCount && unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1.5 min-w-[16px] h-4 px-0.5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center leading-none">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
+          </Link>
           <span className="text-sm text-gray-400 hidden sm:block">{user.email}</span>
           <form action="/auth/signout" method="POST">
             <button className="text-sm text-gray-500 hover:text-gray-700 transition">Вийти</button>

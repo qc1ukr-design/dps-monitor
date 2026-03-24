@@ -90,20 +90,28 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
   const now = new Date().toISOString()
   const results: Record<string, unknown> = {}
 
-  // Upsert profile cache (normalize before storing)
+  // Upsert profile cache (normalize before storing, also store raw for inspection)
   if (profileResult.ok && profileResult.body) {
     const normalized = normalizeProfile(profileResult.body)
-    const { error } = await supabase
-      .from('dps_cache')
-      .upsert({
+    const [{ error }, { error: rawError }] = await Promise.all([
+      supabase.from('dps_cache').upsert({
         client_id: id,
         user_id: user.id,
         data_type: 'profile',
         data: normalized,
         fetched_at: now,
         is_mock: false,
-      }, { onConflict: 'client_id,data_type' })
-    results.profile = { ok: true, error: error?.message }
+      }, { onConflict: 'client_id,data_type' }),
+      supabase.from('dps_cache').upsert({
+        client_id: id,
+        user_id: user.id,
+        data_type: 'profile_raw',
+        data: profileResult.body,
+        fetched_at: now,
+        is_mock: false,
+      }, { onConflict: 'client_id,data_type' }),
+    ])
+    results.profile = { ok: true, error: error?.message ?? rawError?.message }
   } else {
     results.profile = { ok: false, status: profileResult.status, body: profileResult.body }
   }

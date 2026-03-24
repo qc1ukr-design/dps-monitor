@@ -13,6 +13,7 @@ import { decrypt } from '@/lib/crypto'
 import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
 import { detectAlerts } from '@/lib/dps/alerts'
+import { sendAlertEmail } from '@/lib/email'
 
 const DPS_BASE = 'https://cabinet.tax.gov.ua/ws/public_api'
 
@@ -64,6 +65,16 @@ export async function GET(request: NextRequest) {
     .select('id, name')
     .in('id', clientIds)
   const clientMap = new Map(clients?.map(c => [c.id, c.name]) ?? [])
+
+  // ── User email lookup (for notifications) ────────────────────────────────
+  const uniqueUserIds = Array.from(new Set(tokens.map(t => t.user_id)))
+  const userEmailMap = new Map<string, string>()
+  for (const uid of uniqueUserIds) {
+    try {
+      const { data: { user } } = await supabase.auth.admin.getUserById(uid)
+      if (user?.email) userEmailMap.set(uid, user.email)
+    } catch { /* skip */ }
+  }
 
   // ── Process each client ───────────────────────────────────────────────────
   for (const token of tokens) {
@@ -136,6 +147,16 @@ export async function GET(request: NextRequest) {
           )
           clientAlerts = detected.length
           alertsCreated += clientAlerts
+
+          // Email notification (fire-and-forget)
+          const emailAddr = userEmailMap.get(userId)
+          if (emailAddr) {
+            sendAlertEmail({
+              to: emailAddr,
+              clientName,
+              alerts: detected.map(a => ({ message: a.message })),
+            }).catch(() => { /* ignore */ })
+          }
         }
       }
 

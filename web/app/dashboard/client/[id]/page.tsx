@@ -5,8 +5,11 @@ import TaxpayerProfileCard from '@/components/taxpayer-profile'
 import BudgetCalculationsTable from '@/components/budget-calculations'
 import { MOCK_PROFILE, MOCK_BUDGET } from '@/lib/dps/mock-data'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
+import { alertIcon } from '@/lib/dps/alerts'
+import type { AlertType } from '@/lib/dps/alerts'
 import SyncButton from './sync-button'
 import DeleteButton from './delete-button'
+import MarkReadButton from '@/app/dashboard/alerts/mark-read-button'
 
 interface PageProps {
   params: Promise<{ id: string }>
@@ -37,20 +40,33 @@ export default async function ClientPage({ params }: PageProps) {
 
   const kepConfigured = !!tokenRow?.kep_ca_name
 
-  // Load cached DPS data
-  const { data: cacheRows } = await supabase
-    .from('dps_cache')
-    .select('data_type, data, fetched_at, is_mock')
-    .eq('client_id', id)
-    .eq('user_id', user.id)
+  // Load cached DPS data + unread alerts in parallel
+  const [cacheResult, alertsResult] = await Promise.all([
+    supabase
+      .from('dps_cache')
+      .select('data_type, data, fetched_at, is_mock')
+      .eq('client_id', id)
+      .eq('user_id', user.id),
+    supabase
+      .from('alerts')
+      .select('id, type, message, created_at')
+      .eq('client_id', id)
+      .eq('user_id', user.id)
+      .eq('is_read', false)
+      .order('created_at', { ascending: false })
+      .limit(5),
+  ])
 
-  const profileCache = cacheRows?.find(r => r.data_type === 'profile')
-  const budgetCache = cacheRows?.find(r => r.data_type === 'budget')
+  const cacheRows = cacheResult.data ?? []
+  const unreadAlerts = alertsResult.data ?? []
+
+  const profileCache = cacheRows.find(r => r.data_type === 'profile')
+  const budgetCache  = cacheRows.find(r => r.data_type === 'budget')
 
   const profileData = profileCache?.data ? normalizeProfile(profileCache.data) : MOCK_PROFILE
-  const budgetData = budgetCache?.data ? normalizeBudget(budgetCache.data) : MOCK_BUDGET
+  const budgetData  = budgetCache?.data  ? normalizeBudget(budgetCache.data)   : MOCK_BUDGET
   const profileIsMock = !profileCache || profileCache.is_mock
-  const budgetIsMock = !budgetCache || budgetCache.is_mock
+  const budgetIsMock  = !budgetCache  || budgetCache.is_mock
 
   // Most recent sync time
   const syncTimes = [profileCache?.fetched_at, budgetCache?.fetched_at].filter(Boolean)
@@ -103,6 +119,36 @@ export default async function ClientPage({ params }: PageProps) {
           )}
         </div>
       </div>
+
+      {/* ── Unread alerts banner ─────────────────────────────────────────── */}
+      {unreadAlerts.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl px-5 py-4">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm font-semibold text-blue-900">
+              🔔 {unreadAlerts.length === 1
+                ? '1 непрочитаний алерт'
+                : `${unreadAlerts.length} непрочитаних алертів`}
+            </p>
+            <div className="flex items-center gap-3">
+              <MarkReadButton clientId={id} label="Позначити як прочитані" />
+              <Link
+                href="/dashboard/alerts"
+                className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+              >
+                Всі алерти →
+              </Link>
+            </div>
+          </div>
+          <ul className="space-y-1.5">
+            {unreadAlerts.map(alert => (
+              <li key={alert.id} className="flex items-start gap-2 text-sm text-blue-800">
+                <span className="flex-shrink-0">{alertIcon(alert.type as AlertType)}</span>
+                <span>{alert.message}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <TaxpayerProfileCard profile={profileData} isMock={profileIsMock} />
       <BudgetCalculationsTable data={budgetData} isMock={budgetIsMock} />

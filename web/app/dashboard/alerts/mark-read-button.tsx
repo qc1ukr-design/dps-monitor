@@ -3,14 +3,22 @@
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 
-export default function MarkReadButton() {
+interface Props {
+  clientId?: string
+  label?: string
+}
+
+export default function MarkReadButton({ clientId, label }: Props) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
 
   async function handleClick() {
     setLoading(true)
     try {
-      await fetch('/api/alerts/mark-read', { method: 'POST' })
+      const url = clientId
+        ? `/api/alerts/mark-read?client_id=${clientId}`
+        : '/api/alerts/mark-read'
+      await fetch(url, { method: 'POST' })
       router.refresh()
     } finally {
       setLoading(false)
@@ -23,7 +31,7 @@ export default function MarkReadButton() {
       disabled={loading}
       className="text-sm text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50"
     >
-      {loading ? 'Оновлення...' : 'Позначити всі як прочитані'}
+      {loading ? 'Оновлення...' : (label ?? 'Позначити всі як прочитані')}
     </button>
   )
 }

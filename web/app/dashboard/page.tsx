@@ -126,12 +126,12 @@ export default async function DashboardPage() {
   const hasClients = totalClients > 0
 
   const modules = [
-    { icon: '🏢', title: 'Профіль платника', desc: 'Назва, ЄДРПОУ, статус', active: true },
-    { icon: '💰', title: 'Розрахунки з бюджетом', desc: 'Борги, переплати, нарахування', active: true },
-    { icon: '📥', title: 'Вхідна документація', desc: 'Листи та повідомлення від ДПС', active: true },
-    { icon: '📋', title: 'Звітність', desc: 'Статуси поданих звітів', active: true },
-    { icon: '🔔', title: 'Алерти', desc: 'Нові борги та повідомлення', active: false },
-    { icon: '📊', title: 'Excel-звіт', desc: 'Зведений звіт по всіх клієнтах', active: false },
+    { icon: '🏢', title: 'Профіль платника', desc: 'Назва, ЄДРПОУ, статус', active: true, href: '/dashboard/clients' },
+    { icon: '💰', title: 'Розрахунки з бюджетом', desc: 'Борги, переплати, нарахування', active: true, href: '/dashboard/clients' },
+    { icon: '📥', title: 'Вхідна документація', desc: 'Листи та повідомлення від ДПС', active: true, href: '/dashboard/clients' },
+    { icon: '📋', title: 'Звітність', desc: 'Статуси поданих звітів', active: true, href: '/dashboard/clients' },
+    { icon: '🔔', title: 'Алерти', desc: 'Нові борги та повідомлення', active: true, href: '/dashboard/alerts' },
+    { icon: '📊', title: 'Excel-звіт', desc: 'Зведений звіт по всіх клієнтах', active: false, href: null },
   ]
 
   return (
@@ -309,29 +309,32 @@ export default async function DashboardPage() {
         <div>
           <h2 className="text-lg font-semibold text-gray-900 mb-3">Модулі</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {modules.map((m) => (
-              <div
-                key={m.title}
-                className={`bg-white rounded-xl border p-5 transition ${
-                  m.active
-                    ? 'border-blue-200 hover:shadow-sm'
-                    : 'border-gray-200 opacity-60'
-                }`}
-              >
-                <div className="text-2xl mb-3">{m.icon}</div>
-                <h3 className="font-semibold text-gray-900">{m.title}</h3>
-                <p className="text-sm text-gray-500 mt-1">{m.desc}</p>
-                <span
-                  className={`mt-3 inline-block text-xs px-2 py-0.5 rounded font-medium ${
-                    m.active
-                      ? 'bg-green-100 text-green-700'
-                      : 'bg-gray-100 text-gray-500'
-                  }`}
-                >
-                  {m.active ? 'Активний' : 'Незабаром'}
-                </span>
-              </div>
-            ))}
+            {modules.map((m) => {
+              const inner = (
+                <>
+                  <div className="text-2xl mb-3">{m.icon}</div>
+                  <h3 className="font-semibold text-gray-900">{m.title}</h3>
+                  <p className="text-sm text-gray-500 mt-1">{m.desc}</p>
+                  <span
+                    className={`mt-3 inline-block text-xs px-2 py-0.5 rounded font-medium ${
+                      m.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                    }`}
+                  >
+                    {m.active ? 'Активний' : 'Незабаром'}
+                  </span>
+                </>
+              )
+              const cls = `bg-white rounded-xl border p-5 transition ${
+                m.active
+                  ? 'border-blue-200 hover:shadow-md cursor-pointer'
+                  : 'border-gray-200 opacity-60'
+              }`
+              return m.active && m.href ? (
+                <Link key={m.title} href={m.href} className={cls}>{inner}</Link>
+              ) : (
+                <div key={m.title} className={cls}>{inner}</div>
+              )
+            })}
           </div>
         </div>
 

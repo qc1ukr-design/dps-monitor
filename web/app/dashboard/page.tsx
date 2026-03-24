@@ -126,12 +126,12 @@ export default async function DashboardPage() {
   const hasClients = totalClients > 0
 
   const modules = [
-    { icon: '🏢', title: 'Профіль платника', desc: 'Назва, ЄДРПОУ, статус', active: true, href: '/dashboard/clients' },
-    { icon: '💰', title: 'Розрахунки з бюджетом', desc: 'Борги, переплати, нарахування', active: true, href: '/dashboard/clients' },
-    { icon: '📥', title: 'Вхідна документація', desc: 'Листи та повідомлення від ДПС', active: true, href: '/dashboard/clients' },
-    { icon: '📋', title: 'Звітність', desc: 'Статуси поданих звітів', active: true, href: '/dashboard/clients' },
-    { icon: '🔔', title: 'Алерти', desc: 'Нові борги та повідомлення', active: true, href: '/dashboard/alerts' },
-    { icon: '📊', title: 'Excel-звіт', desc: 'Зведений звіт по всіх клієнтах', active: false, href: null },
+    { icon: '🏢', title: 'Профіль платника', desc: 'Назва, ЄДРПОУ, статус', active: true, href: '/dashboard/clients', download: false },
+    { icon: '💰', title: 'Розрахунки з бюджетом', desc: 'Борги, переплати, нарахування', active: true, href: '/dashboard/clients', download: false },
+    { icon: '📥', title: 'Вхідна документація', desc: 'Листи та повідомлення від ДПС', active: true, href: '/dashboard/clients', download: false },
+    { icon: '📋', title: 'Звітність', desc: 'Статуси поданих звітів', active: true, href: '/dashboard/clients', download: false },
+    { icon: '🔔', title: 'Алерти', desc: 'Нові борги та повідомлення', active: true, href: '/dashboard/alerts', download: false },
+    { icon: '📊', title: 'Excel-звіт', desc: 'Зведений звіт по всіх клієнтах', active: hasClients, href: '/api/export/excel', download: true },
   ]
 
   return (
@@ -329,6 +329,9 @@ export default async function DashboardPage() {
                   ? 'border-blue-200 hover:shadow-md cursor-pointer'
                   : 'border-gray-200 opacity-60'
               }`
+              if (m.active && m.href && m.download) {
+                return <a key={m.title} href={m.href} download className={cls}>{inner}</a>
+              }
               return m.active && m.href ? (
                 <Link key={m.title} href={m.href} className={cls}>{inner}</Link>
               ) : (

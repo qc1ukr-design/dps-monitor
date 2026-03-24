@@ -8,7 +8,7 @@ interface Props {
 }
 
 function fmt(n: number) {
-  return new Intl.NumberFormat('uk-UA', { style: 'currency', currency: 'UAH', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('uk-UA', { maximumFractionDigits: 0 }).format(n) + '\u00a0грн'
 }
 
 export default function BudgetCalculationsTable({ data, isMock }: Props) {

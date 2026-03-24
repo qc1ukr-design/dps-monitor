@@ -192,14 +192,139 @@ function extractCertsFromPfxFallback(pfxBuffer: Buffer, password: string): Buffe
 }
 
 /**
+ * Ukrainian CA (ЦСК/КНЕДП) servers for CMP certificate retrieval.
+ * Source: https://iit.com.ua/download/productfiles/CAs.json
+ * monobank uses ca.monobank.ua — must be first since it's the target CA.
+ */
+const CMP_SERVERS = [
+  'http://ca.monobank.ua/services/cmp/',       // monobank / Universal Bank
+  'http://acsk.privatbank.ua/services/cmp/',   // PrivatBank
+  'http://acskidd.gov.ua/services/cmp/',       // ДПС / IIT
+  'http://ca.iit.com.ua/services/cmp/',        // IIT
+  'http://ca.tax.gov.ua/services/cmp/',        // Податкова
+  'http://masterkey.ua/services/cmp/',         // MasterKey
+  'http://uakey.com.ua/services/cmp/',         // UAKEY
+  'http://ca.vchasno.ua/services/cmp/',        // Вчасно
+  'http://ca.depositsign.com/services/cmp/',   // DepositSign
+]
+
+/**
+ * Fetch the certificate matching the private key from Ukrainian CA servers
+ * via CMP (Certificate Management Protocol).
+ *
+ * This is the same mechanism used by IIT's DPS Cabinet library.
+ * When a .pfx contains only private keys (no certificate bags) — which is
+ * the case for monobank KEP — the cert must be retrieved from the issuing CA.
+ *
+ * Based on jkurwa's examples/certfetch.js.
+ */
+async function fetchCertFromCA(box: InstanceType<typeof jk.Box>): Promise<Buffer[]> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const Message = require('jkurwa/lib/models/Message') as new (data: Buffer | object) => {
+    as_asn1: () => Buffer
+    info: unknown
+  }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const JkCertificate = require('jkurwa/lib/models/Certificate') as new (data: unknown) => {
+    as_asn1: () => Buffer
+  }
+
+  type BoxInternal = {
+    keys: Array<{ priv: { pub: () => { keyid: (algo: unknown) => Buffer } } }>
+    algo: unknown
+  }
+  const b = box as unknown as BoxInternal
+  if (!b.keys?.length) return []
+
+  // Build the 120-byte CMP request payload (from jkurwa certfetch.js)
+  const keyids = b.keys.map(info => info.priv.pub().keyid(b.algo))
+  const ct = Buffer.alloc(120)
+  ct.fill(0)
+  keyids[0].copy(ct, 0x0C)
+  ;(keyids[1] ?? keyids[0]).copy(ct, 0x2C)
+  ct[0x6C] = 0x1
+  ct[0x70] = 0x1
+  ct[0x08] = 2
+  ct[0] = 0x0D
+
+  const payload = (new Message({ type: 'data', data: ct })).as_asn1()
+
+  console.log('[CMP] Starting cert fetch, keyids count:', keyids.length)
+
+  for (const server of CMP_SERVERS) {
+    try {
+      console.log('[CMP] Trying server:', server)
+      const response = await fetch(server, {
+        method: 'POST',
+        body: new Uint8Array(payload),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        signal: (AbortSignal as any).timeout(8000),
+      })
+
+      console.log('[CMP] Response status:', response.status, 'from', server)
+      if (!response.ok) continue
+
+      const bodyBuf = Buffer.from(await response.arrayBuffer())
+      console.log('[CMP] Response body length:', bodyBuf.length, 'first bytes:', bodyBuf.slice(0, 8).toString('hex'))
+
+      // Parse outer envelope — type='data', info is raw Buffer
+      let rmsg: { info: unknown }
+      try { rmsg = new Message(bodyBuf) } catch (e) {
+        console.log('[CMP] Failed to parse outer message:', e)
+        continue
+      }
+
+      const infoBuf = rmsg.info as Buffer
+      console.log('[CMP] info is Buffer:', Buffer.isBuffer(infoBuf), 'length:', Buffer.isBuffer(infoBuf) ? infoBuf.length : 'n/a')
+      if (!Buffer.isBuffer(infoBuf) || infoBuf.length < 8) continue
+
+      // Result code at offset 4: 1 = success
+      const resultCode = infoBuf.readInt32LE(4)
+      console.log('[CMP] Result code:', resultCode)
+      if (resultCode !== 1) continue
+
+      // Parse inner message (skip 8-byte header) — signedData with certificate[]
+      let rmsg2: { info: { certificate?: unknown[] } }
+      try {
+        rmsg2 = new Message(infoBuf.slice(8)) as { info: { certificate?: unknown[] } }
+      } catch (e) {
+        console.log('[CMP] Failed to parse inner message:', e)
+        continue
+      }
+
+      const certDatas = rmsg2.info?.certificate
+      console.log('[CMP] certificate array length:', Array.isArray(certDatas) ? certDatas.length : 'not array')
+      if (!Array.isArray(certDatas) || certDatas.length === 0) continue
+
+      const certBuffers: Buffer[] = []
+      for (const certData of certDatas) {
+        try {
+          certBuffers.push(new JkCertificate(certData).as_asn1())
+        } catch (e) {
+          console.log('[CMP] Failed to parse cert:', e)
+        }
+      }
+
+      console.log('[CMP] Extracted cert buffers:', certBuffers.length)
+      if (certBuffers.length > 0) return certBuffers
+    } catch (e) {
+      console.log('[CMP] Error with server', server, ':', e)
+    }
+  }
+
+  console.log('[CMP] All servers failed, returning empty')
+  return []
+}
+
+/**
  * Load a Box from a single KEP file buffer + password.
  * Handles both direct files and ZIP containers.
  *
- * For PKCS#12 (.pfx/.p12): if jkurwa finds private keys but no certificates
- * (happens with monobank KEP where cert bags use modern encryption algorithms),
- * falls back to node-forge to extract the certs and reloads the box.
+ * Fallback chain when no certificates are found after initial load:
+ *   1. node-forge — decrypts modern PKCS#12 cert bags (AES/PBKDF2)
+ *   2. CMP fetch  — retrieves cert from Ukrainian CA server (monobank KEP case)
  */
-function loadBox(pfxBuffer: Buffer, password: string): InstanceType<typeof jk.Box> {
+async function loadBox(pfxBuffer: Buffer, password: string): Promise<InstanceType<typeof jk.Box>> {
   const algo = gost89.compat.algos()
   const box = new jk.Box({ algo })
 
@@ -218,12 +343,21 @@ function loadBox(pfxBuffer: Buffer, password: string): InstanceType<typeof jk.Bo
     !(b.certs?.length) && (b.keys ?? []).every(k => !k.cert)
 
   if (noLinkedCerts) {
-    // Fallback: decrypt cert bags with node-forge (handles modern PKCS#12 encryption)
-    const fallbackCerts = extractCertsFromPfxFallback(pfxBuffer, password)
-    if (fallbackCerts.length > 0) {
+    // Fallback 1: decrypt cert bags with node-forge (handles modern PKCS#12 encryption)
+    const forgeCerts = extractCertsFromPfxFallback(pfxBuffer, password)
+    if (forgeCerts.length > 0) {
       const box2 = new jk.Box({ algo })
-      box2.loadMaterial([{ keyBuffers: [pfxBuffer], certBuffers: fallbackCerts, password }])
+      box2.loadMaterial([{ keyBuffers: [pfxBuffer], certBuffers: forgeCerts, password }])
       return box2
+    }
+
+    // Fallback 2: fetch cert from Ukrainian CA via CMP protocol
+    // (monobank KEP: .pfx has only private keys, cert lives on the CA server)
+    const caCerts = await fetchCertFromCA(box)
+    if (caCerts.length > 0) {
+      const box3 = new jk.Box({ algo })
+      box3.loadMaterial([{ keyBuffers: [pfxBuffer], certBuffers: caCerts, password }])
+      return box3
     }
   }
 
@@ -233,15 +367,44 @@ function loadBox(pfxBuffer: Buffer, password: string): InstanceType<typeof jk.Bo
 /**
  * Load a Box from pre-separated key and cert file buffers.
  * Used when user uploads .dat + .cer files separately.
+ * If no certs are provided and jkurwa finds none internally,
+ * falls back to CMP fetch from Ukrainian CA servers.
  */
-function loadBoxFromFiles(
+async function loadBoxFromFiles(
   keyBuffers: Buffer[],
   certBuffers: Buffer[],
   password: string
-): InstanceType<typeof jk.Box> {
+): Promise<InstanceType<typeof jk.Box>> {
   const algo = gost89.compat.algos()
   const box = new jk.Box({ algo })
   box.loadMaterial([{ keyBuffers, certBuffers, password }])
+
+  // If no certs were supplied and none were loaded, try CMP fetch
+  type BoxInternal = { keys: Array<{ priv: unknown; cert: unknown }>; certs: unknown[] }
+  const b = box as unknown as BoxInternal
+  const noLinkedCerts =
+    !(b.certs?.length) && (b.keys ?? []).every(k => !k.cert)
+
+  if (noLinkedCerts && certBuffers.length === 0) {
+    // Fallback 1: node-forge (for modern PKCS#12 cert bag encryption)
+    for (const keyBuf of keyBuffers) {
+      const forgeCerts = extractCertsFromPfxFallback(keyBuf, password)
+      if (forgeCerts.length > 0) {
+        const box2 = new jk.Box({ algo })
+        box2.loadMaterial([{ keyBuffers, certBuffers: forgeCerts, password }])
+        return box2
+      }
+    }
+
+    // Fallback 2: CMP fetch from Ukrainian CA
+    const caCerts = await fetchCertFromCA(box)
+    if (caCerts.length > 0) {
+      const box3 = new jk.Box({ algo })
+      box3.loadMaterial([{ keyBuffers, certBuffers: caCerts, password }])
+      return box3
+    }
+  }
+
   return box
 }
 
@@ -252,7 +415,7 @@ function loadBoxFromFiles(
  *   - Legacy: raw pfxBase64 string (single file)
  *   - v2: JSON string { v: 2, files: Array<{ name: string, base64: string }> }
  */
-function loadBoxFromDecrypted(kepDecrypted: string, password: string): InstanceType<typeof jk.Box> {
+async function loadBoxFromDecrypted(kepDecrypted: string, password: string): Promise<InstanceType<typeof jk.Box>> {
   if (kepDecrypted.startsWith('{')) {
     // v2 multi-file format
     const { files } = JSON.parse(kepDecrypted) as {
@@ -270,7 +433,7 @@ function loadBoxFromDecrypted(kepDecrypted: string, password: string): InstanceT
         keyBuffers.push(buf)
       }
     }
-    return loadBoxFromFiles(keyBuffers, certBuffers, password)
+    return await loadBoxFromFiles(keyBuffers, certBuffers, password)
   } else {
     // Legacy: single pfxBase64
     return loadBox(Buffer.from(kepDecrypted, 'base64'), password)
@@ -330,7 +493,8 @@ function getSigningKey(box: InstanceType<typeof jk.Box>): {
   if (withCert) return withCert
 
   throw new Error(
-    `NO_CERT:Ключів: ${allKeys.length}, сертифікатів: ${allCerts.length}`
+    `NO_CERT:Ключів: ${allKeys.length}, сертифікатів: ${allCerts.length}. ` +
+    `Не вдалося отримати сертифікат ні з файлу, ні з серверів ЦСК.`
   )
 }
 
@@ -367,7 +531,7 @@ function extractCertInfo(cert: InstanceType<typeof jk.Certificate>): KepInfo {
  * Parse a single KEP file buffer and return info about the signing certificate.
  */
 export async function inspectKep(pfxBuffer: Buffer, password: string): Promise<KepInfo> {
-  const box = loadBox(pfxBuffer, password)
+  const box = await loadBox(pfxBuffer, password)
   const keyInfo = getSigningKey(box)
   return extractCertInfo(keyInfo.cert)
 }
@@ -381,7 +545,7 @@ export async function inspectKepFiles(
   certBuffers: Buffer[],
   password: string
 ): Promise<KepInfo> {
-  const box = loadBoxFromFiles(keyBuffers, certBuffers, password)
+  const box = await loadBoxFromFiles(keyBuffers, certBuffers, password)
   const keyInfo = getSigningKey(box)
   return extractCertInfo(keyInfo.cert)
 }
@@ -396,7 +560,7 @@ export async function signWithKepDecrypted(
   password: string,
   data: string | Buffer
 ): Promise<string> {
-  const box = loadBoxFromDecrypted(kepDecrypted, password)
+  const box = await loadBoxFromDecrypted(kepDecrypted, password)
   const dataBuffer = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8')
 
   const message = await box.sign(dataBuffer, undefined, null, {
@@ -417,7 +581,7 @@ export async function signWithKep(
   password: string,
   data: string | Buffer
 ): Promise<string> {
-  const box = loadBox(pfxBuffer, password)
+  const box = await loadBox(pfxBuffer, password)
   const dataBuffer = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8')
 
   const message = await box.sign(dataBuffer, undefined, null, {

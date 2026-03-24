@@ -10,7 +10,6 @@ interface KepStatus {
   ownerName?: string
   validTo?: string
   taxId?: string
-  updatedAt?: string
 }
 
 export default function ClientSettingsPage() {
@@ -18,21 +17,15 @@ export default function ClientSettingsPage() {
   const router = useRouter()
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const [dpsToken, setDpsToken] = useState('')
   const [kepPassword, setKepPassword] = useState('')
   const [showKepPassword, setShowKepPassword] = useState(false)
   const [kepStatus, setKepStatus] = useState<KepStatus | null>(null)
-  const [loading, setLoading] = useState(false)
   const [kepLoading, setKepLoading] = useState(false)
-  const [error, setError] = useState('')
   const [kepError, setKepError] = useState('')
-  const [tokenSuccess, setTokenSuccess] = useState(false)
-  // 'idle' | 'uploaded' — tracks post-upload UI state
   const [kepUploadedInfo, setKepUploadedInfo] = useState<KepStatus | null>(null)
   const [showReplaceForm, setShowReplaceForm] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
 
-  // Load existing KEP status
   useEffect(() => {
     fetch(`/api/clients/${id}/kep`)
       .then(r => r.json())
@@ -40,61 +33,24 @@ export default function ClientSettingsPage() {
       .catch(() => {})
   }, [id])
 
-  async function handleUpdateToken(e: React.FormEvent) {
-    e.preventDefault()
-    setError('')
-    setTokenSuccess(false)
-    setLoading(true)
-
-    const res = await fetch(`/api/clients/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dpsToken }),
-    })
-
-    setLoading(false)
-
-    if (!res.ok) {
-      const json = await res.json()
-      setError(json.error || 'Помилка оновлення токена')
-      return
-    }
-
-    setTokenSuccess(true)
-    setDpsToken('')
-    setTimeout(() => setTokenSuccess(false), 4000)
-  }
-
   async function handleUploadKep(e: React.FormEvent) {
     e.preventDefault()
     setKepError('')
 
     const files = fileRef.current?.files
-    if (!files || files.length === 0) {
-      setKepError('Оберіть файл(и) KEP')
-      return
-    }
-    if (!kepPassword) {
-      setKepError('Введіть пароль KEP')
-      return
-    }
+    if (!files || files.length === 0) { setKepError('Оберіть файл(и) KEP'); return }
+    if (!kepPassword) { setKepError('Введіть пароль KEP'); return }
 
     setKepLoading(true)
 
-    // Read all selected files as base64
     const filePayload = await Promise.all(
-      Array.from(files).map(
-        (file) =>
-          new Promise<{ name: string; base64: string }>((resolve, reject) => {
-            const reader = new FileReader()
-            reader.onload = () =>
-              resolve({
-                name: file.name,
-                base64: (reader.result as string).split(',')[1],
-              })
-            reader.onerror = reject
-            reader.readAsDataURL(file)
-          })
+      Array.from(files).map(file =>
+        new Promise<{ name: string; base64: string }>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve({ name: file.name, base64: (reader.result as string).split(',')[1] })
+          reader.onerror = reject
+          reader.readAsDataURL(file)
+        })
       )
     )
 
@@ -109,13 +65,10 @@ export default function ClientSettingsPage() {
 
     if (!res.ok) {
       const detail = json.detail ?? ''
-      if (detail.includes('NO_CERT') || detail.includes('сертифікатів: 0')) {
+      if (detail.includes('NO_CERT')) {
         setKepError(
-          'У файлі .pfx відсутній сертифікат — тільки приватний ключ.\n\n' +
-          'Це типово для monobank КЕП. Потрібно завантажити ще й файл сертифіката (.cer):\n' +
-          '1. Додаток monobank → КЕП → «Завантажити сертифікат»\n' +
-          '2. Або зверніться до ЦСК, що видав КЕП\n\n' +
-          'Виберіть обидва файли (.pfx + .cer) одночасно і спробуйте знову.'
+          'Сертифікат не знайдено у файлі та на серверах ЦСК.\n\n' +
+          'Спробуйте завантажити .pfx разом із файлом сертифіката (.cer) одночасно.'
         )
       } else {
         setKepError(json.error + (detail ? '\n' + detail : ''))
@@ -135,18 +88,13 @@ export default function ClientSettingsPage() {
 
   async function handleDelete() {
     if (!confirm('Видалити контрагента? Всі дані будуть втрачені.')) return
-
     const res = await fetch(`/api/clients/${id}`, { method: 'DELETE' })
     if (res.ok) {
       router.push('/dashboard/clients')
-    } else {
-      const json = await res.json()
-      setError(json.error || 'Помилка видалення')
     }
   }
 
-  // Should we show the upload form?
-  const showUploadForm = !kepStatus?.configured || showReplaceForm || kepUploadedInfo === null && !kepStatus?.configured
+  const showUploadForm = !kepStatus?.configured || showReplaceForm
 
   return (
     <div className="max-w-lg mx-auto py-10 px-4 space-y-6">
@@ -160,13 +108,13 @@ export default function ClientSettingsPage() {
       {/* KEP section */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
         <div>
-          <h2 className="font-semibold text-gray-900">Ключ електронного підпису (KEP)</h2>
+          <h2 className="font-semibold text-gray-900">Ключ електронного підпису (КЕП)</h2>
           <p className="text-xs text-gray-500 mt-0.5">
             Зберігається тільки у зашифрованому вигляді на вашому акаунті.
           </p>
         </div>
 
-        {/* ── Success state after upload ── */}
+        {/* Success after upload */}
         {kepUploadedInfo && !showReplaceForm && (
           <div className="bg-green-50 border border-green-200 rounded-xl px-5 py-4 space-y-3">
             <div className="flex items-center gap-2">
@@ -188,7 +136,7 @@ export default function ClientSettingsPage() {
                 href={`/dashboard/client/${id}`}
                 className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition"
               >
-                Синхронізувати дані →
+                До кабінету контрагента →
               </Link>
               <button
                 onClick={() => setShowReplaceForm(true)}
@@ -200,10 +148,10 @@ export default function ClientSettingsPage() {
           </div>
         )}
 
-        {/* ── Existing KEP info (no fresh upload) ── */}
+        {/* Existing KEP (no fresh upload) */}
         {kepStatus?.configured && !kepUploadedInfo && !showReplaceForm && (
           <div className="bg-blue-50 rounded-lg px-4 py-3 text-sm space-y-1">
-            <div className="font-medium text-blue-800">KEP підключено</div>
+            <div className="font-medium text-blue-800">КЕП підключено</div>
             {kepStatus.ownerName && <div className="text-blue-700">Власник: {kepStatus.ownerName}</div>}
             {kepStatus.caName && <div className="text-blue-600">АЦСК: {kepStatus.caName}</div>}
             {kepStatus.taxId && <div className="text-blue-600">Податковий номер: {kepStatus.taxId}</div>}
@@ -221,8 +169,8 @@ export default function ClientSettingsPage() {
           </div>
         )}
 
-        {/* ── Upload form ── */}
-        {(showUploadForm || showReplaceForm) && (
+        {/* Upload form */}
+        {showUploadForm && (
           <form onSubmit={handleUploadKep} className="space-y-4">
             {showReplaceForm && (
               <div className="flex items-center justify-between">
@@ -239,7 +187,7 @@ export default function ClientSettingsPage() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Файл(и) KEP <span className="text-red-500">*</span>
+                Файл(и) КЕП <span className="text-red-500">*</span>
               </label>
               <input
                 ref={fileRef}
@@ -273,7 +221,7 @@ export default function ClientSettingsPage() {
                   type={showKepPassword ? 'text' : 'password'}
                   value={kepPassword}
                   onChange={(e) => setKepPassword(e.target.value)}
-                  placeholder="Пароль від KEP"
+                  placeholder="Пароль від КЕП"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <button
@@ -289,8 +237,7 @@ export default function ClientSettingsPage() {
                     </svg>
                   ) : (
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                         d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                     </svg>
@@ -300,7 +247,7 @@ export default function ClientSettingsPage() {
             </div>
 
             {kepError && (
-              <div className="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-lg">{kepError}</div>
+              <div className="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-lg whitespace-pre-line">{kepError}</div>
             )}
 
             <button
@@ -308,67 +255,21 @@ export default function ClientSettingsPage() {
               disabled={kepLoading}
               className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-60 transition"
             >
-              {kepLoading
-                ? 'Завантаження і перевірка...'
-                : kepStatus?.configured
-                ? 'Замінити KEP'
-                : 'Зберегти KEP'}
+              {kepLoading ? 'Завантаження і перевірка...' : kepStatus?.configured ? 'Замінити КЕП' : 'Зберегти КЕП'}
             </button>
           </form>
         )}
       </div>
 
-      {/* DPS UUID token (optional, legacy) */}
-      <form onSubmit={handleUpdateToken} className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-        <div>
-          <h2 className="font-semibold text-gray-900">Токен ДПС (відкрита частина)</h2>
-          <p className="text-xs text-gray-500 mt-0.5">
-            UUID токен з розділу «Відкриті дані» Електронного кабінету. Необов&apos;язково.
-          </p>
-        </div>
-        <div>
-          <textarea
-            value={dpsToken}
-            onChange={(e) => setDpsToken(e.target.value)}
-            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-            rows={2}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-
-        {error && (
-          <div className="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-lg">{error}</div>
-        )}
-        {tokenSuccess && (
-          <div className="bg-green-50 text-green-700 text-sm px-4 py-3 rounded-lg flex items-center gap-2">
-            <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-            Токен успішно оновлено!
-          </div>
-        )}
-
-        <button
-          type="submit"
-          disabled={loading || !dpsToken.trim()}
-          className="w-full bg-gray-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-gray-700 disabled:opacity-60 transition"
-        >
-          {loading ? 'Збереження...' : 'Оновити токен'}
-        </button>
-      </form>
-
-      {/* Danger zone */}
-      <div className="bg-white rounded-xl border border-red-200 p-6">
-        <h2 className="font-semibold text-red-700 mb-3">Небезпечна зона</h2>
+      {/* Delete — subtle link, not scary red block */}
+      <div className="text-center">
         <button
           onClick={handleDelete}
-          className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-700 transition"
+          className="text-xs text-gray-400 hover:text-red-500 transition underline underline-offset-2"
         >
           Видалити контрагента
         </button>
       </div>
-
-      <div className="text-xs text-gray-400">ID: {id}</div>
     </div>
   )
 }

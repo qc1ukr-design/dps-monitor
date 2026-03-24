@@ -90,8 +90,114 @@ function extractFromZip(zipBuf: Buffer): {
 }
 
 /**
+ * Fallback cert extractor for PKCS#12 files where jkurwa cannot decrypt
+ * the certificate bags (e.g. monobank KEP uses PBKDF2/AES for cert bags,
+ * while jkurwa only supports older PBE-SHA1-RC2 / PBE-SHA1-3DES).
+ *
+ * Strategy:
+ *  1. Use node-forge to decrypt and parse the PKCS#12 fully.
+ *  2. For each certBag: if forge parsed the cert → re-encode to DER.
+ *     If forge failed (DSTU OID unknown) → extract raw DER via bag.asn1.
+ *  3. Return cert DER buffers so jkurwa can link them to its private keys.
+ */
+function extractCertsFromPfxFallback(pfxBuffer: Buffer, password: string): Buffer[] {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const forge = require('node-forge') as {
+      util: { createBuffer: (s: string) => unknown }
+      asn1: {
+        fromDer: (b: unknown) => FAsn1
+        toDer: (a: FAsn1) => { getBytes: () => string }
+        Type: { OCTETSTRING: number }
+      }
+      pki: {
+        oids: { certBag: string }
+        certificateToAsn1: (c: unknown) => FAsn1
+      }
+      pkcs12: {
+        pkcs12FromAsn1: (
+          asn1: FAsn1,
+          strict: boolean,
+          password: string
+        ) => { getBags: (o: { bagType: string }) => Record<string, FBag[]> }
+      }
+    }
+
+    type FAsn1 = {
+      type: number
+      value: FAsn1[] | string
+    }
+    type FBag = {
+      cert?: unknown
+      asn1?: FAsn1
+    }
+
+    const p12Der = forge.util.createBuffer(pfxBuffer.toString('binary'))
+    const p12Asn1 = forge.asn1.fromDer(p12Der)
+    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, false, password)
+
+    const certBagMap = p12.getBags({ bagType: forge.pki.oids.certBag })
+    const bags: FBag[] = certBagMap[forge.pki.oids.certBag] ?? []
+
+    const certBuffers: Buffer[] = []
+
+    for (const bag of bags) {
+      try {
+        if (bag.cert) {
+          // Forge could parse the cert (non-DSTU key type)
+          const certAsn1 = forge.pki.certificateToAsn1(bag.cert)
+          const certDer = forge.asn1.toDer(certAsn1)
+          certBuffers.push(Buffer.from(certDer.getBytes(), 'binary'))
+        } else if (bag.asn1) {
+          // Forge parsed PKCS#12 structure but couldn't parse the cert itself
+          // (common for DSTU 4145 certs with non-standard OIDs).
+          //
+          // CertBag ASN.1:
+          //   SEQUENCE {
+          //     OID (certId = x509Certificate)
+          //     [0] EXPLICIT {
+          //       OCTET STRING { <DER-encoded X.509 cert> }
+          //     }
+          //   }
+          const certBagSeq = bag.asn1
+          const wrapperArr = certBagSeq.value
+          if (!Array.isArray(wrapperArr) || wrapperArr.length < 2) continue
+
+          const explicitWrapper = wrapperArr[1]
+          const innerArr = explicitWrapper?.value
+          if (!Array.isArray(innerArr) || innerArr.length < 1) continue
+
+          const inner = innerArr[0]
+          let certDerBytes: string
+          if (inner.type === 4 /* OCTET STRING */) {
+            // value is the raw cert DER bytes as a binary string
+            certDerBytes = inner.value as string
+          } else {
+            // value is already a SEQUENCE (the cert) — re-encode to DER
+            certDerBytes = forge.asn1.toDer(inner).getBytes()
+          }
+          if (certDerBytes) {
+            certBuffers.push(Buffer.from(certDerBytes, 'binary'))
+          }
+        }
+      } catch {
+        // skip invalid bag
+      }
+    }
+
+    return certBuffers
+  } catch {
+    return []
+  }
+}
+
+/**
  * Load a Box from a single KEP file buffer + password.
  * Handles both direct files and ZIP containers.
+ *
+ * For PKCS#12 (.pfx/.p12): if jkurwa finds private keys but no certificates
+ * (happens with monobank KEP where cert bags use modern encryption algorithms),
+ * falls back to node-forge to extract the certs and reloads the box.
  */
 function loadBox(pfxBuffer: Buffer, password: string): InstanceType<typeof jk.Box> {
   const algo = gost89.compat.algos()
@@ -100,8 +206,25 @@ function loadBox(pfxBuffer: Buffer, password: string): InstanceType<typeof jk.Bo
   if (isZip(pfxBuffer)) {
     const { keyBuffers, certBuffers } = extractFromZip(pfxBuffer)
     box.loadMaterial([{ keyBuffers, certBuffers, password }])
-  } else {
-    box.loadMaterial([{ keyBuffers: [pfxBuffer], password }])
+    return box
+  }
+
+  box.loadMaterial([{ keyBuffers: [pfxBuffer], password }])
+
+  // Check whether jkurwa linked any certificates to the private keys
+  type BoxInternal = { keys: Array<{ priv: unknown; cert: unknown }>; certs: unknown[] }
+  const b = box as unknown as BoxInternal
+  const noLinkedCerts =
+    !(b.certs?.length) && (b.keys ?? []).every(k => !k.cert)
+
+  if (noLinkedCerts) {
+    // Fallback: decrypt cert bags with node-forge (handles modern PKCS#12 encryption)
+    const fallbackCerts = extractCertsFromPfxFallback(pfxBuffer, password)
+    if (fallbackCerts.length > 0) {
+      const box2 = new jk.Box({ algo })
+      box2.loadMaterial([{ keyBuffers: [pfxBuffer], certBuffers: fallbackCerts, password }])
+      return box2
+    }
   }
 
   return box

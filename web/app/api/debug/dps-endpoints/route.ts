@@ -87,11 +87,35 @@ export async function GET(request: NextRequest) {
     // Documents — try with ws/public_api (not ws/a)
     probe(`${DPS_BASE}/corr/correspondence?page=0&limit=20`, kepAuth, 'KEP → public_api/corr/correspondence'),
 
-    // UUID token tests against correct /ws/api/ backend
-    ...(uuidToken ? [
-      probe(`${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${uuidToken}`, `UUID/api → regdoc/list?periodYear=${year}`),
-      probe(`${DPS_API}/corr/correspondence?page=0&size=20`, `Bearer ${uuidToken}`, 'UUID/api → corr/correspondence'),
-    ] : []),
+    // KEP login → get OAuth tokens → test regdoc/list
+    ...await (async () => {
+      try {
+        // signWithKepDecrypted returns "Bearer <base64>", strip prefix for OAuth password
+        const bearerStr = kepAuth
+        const signature = bearerStr.startsWith('Bearer ') ? bearerStr.slice(7) : bearerStr
+        const idCabinet = Date.now()
+        const username = `${taxId}-${taxId}-${idCabinet}`
+        const loginRes = await fetch('https://cabinet.tax.gov.ua/ws/auth/oauth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`,
+          signal: AbortSignal.timeout(20000),
+          cache: 'no-store',
+        })
+        const loginText = await loginRes.text()
+        const loginResult = { label: `KEP LOGIN → ws/auth/oauth/token (${loginRes.status})`, url: 'ws/auth/oauth/token', status: loginRes.status, ok: loginRes.ok, preview: loginText.slice(0, 300) }
+        if (!loginRes.ok) return [loginResult]
+        const tokens = JSON.parse(loginText)
+        const freshToken = tokens.access_token
+        return [
+          loginResult,
+          await probe(`${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${freshToken}`, `KEP+LOGIN → regdoc/list?periodYear=${year}`),
+          await probe(`${DPS_API}/corr/correspondence?page=0&size=20`, `Bearer ${freshToken}`, 'KEP+LOGIN → corr/correspondence'),
+        ]
+      } catch (e) {
+        return [{ label: 'KEP LOGIN → error', url: '', status: 0, ok: false, preview: String(e) }]
+      }
+    })(),
 
     // Test refresh token endpoint (pass ?refreshToken=xxx to test)
     ...(refreshToken ? await (async () => {

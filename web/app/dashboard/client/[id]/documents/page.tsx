@@ -50,6 +50,7 @@ async function fetchDocuments(
 
       const endpoints = [
         `${DPS_BASE}/corr/correspondence?page=0&size=50`,
+        `${DPS_BASE}/corr/correspondence?page=0&limit=50`,
         `${DPS_BASE}/corr/list?page=0&size=50`,
       ]
 
@@ -63,7 +64,8 @@ async function fetchDocuments(
           const raw = await res.json()
           return { ...normalizeDocuments(raw), noKep: false, isMock: false }
         }
-        publicApiError += `${url.split('/').slice(-1)[0].split('?')[0]}→${res.status} `
+        const body = (await res.text().catch(() => '')).slice(0, 100)
+        publicApiError += `${url.split('/').slice(-1)[0].split('?')[0]}→${res.status}(${body}) `
       }
       publicApiError = publicApiError.trim()
     } catch (e) {

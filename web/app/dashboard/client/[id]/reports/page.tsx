@@ -52,6 +52,7 @@ async function fetchReports(
 
       const endpoints = [
         `${DPS_BASE}/regdoc/list?periodYear=${year}&page=0&size=50`,
+        `${DPS_BASE}/regdoc/list?year=${year}&page=0&size=50`,
         `${DPS_BASE}/zvit/zvit_list?year=${year}`,
         `${DPS_BASE}/zvit/list?year=${year}`,
       ]
@@ -66,7 +67,8 @@ async function fetchReports(
           const raw = await res.json()
           return { ...normalizeReports(raw), noKep: false, isMock: false }
         }
-        publicApiError += `${url.split('/').slice(-1)[0].split('?')[0]}→${res.status} `
+        const body = (await res.text().catch(() => '')).slice(0, 100)
+        publicApiError += `${url.split('/').slice(-1)[0].split('?')[0]}→${res.status}(${body}) `
       }
       publicApiError = publicApiError.trim()
     } catch (e) {

@@ -22,6 +22,51 @@ const AdmZip = require('adm-zip') as new (buf: Buffer) => {
 }
 /* eslint-enable @typescript-eslint/no-require-imports */
 
+/**
+ * Patch jkurwa's SigningCertificateV2 to use SHA-256 (RFC 5035 default) instead of
+ * GOST-34311. The DPS OAuth server's Spring Security auth provider uses standard
+ * CAdES-BES parsing (sha256-based cert refs), while the public_api endpoint
+ * ignores signingCertificateV2 entirely. Without this patch, OAuth returns HTTP 500
+ * because the server crashes trying to interpret a non-standard GOST cert hash.
+ */
+try {
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const { createHash } = require('crypto') as typeof import('crypto')
+  const rfc3280 = require('jkurwa/lib/spec/rfc3280') as { ALGORITHMS_IDS: Record<string, string>; Certificate: { encode: (obj: unknown, enc: string) => Buffer } }
+  const certidSpec = require('jkurwa/lib/spec/rfc5035-certid') as {
+    SigningCertificateV2: {
+      wrap: (cert: unknown, hash: Buffer) => Buffer
+      encode: (data: unknown, enc: string) => Buffer
+    }
+  }
+  /* eslint-enable @typescript-eslint/no-require-imports */
+
+  // Register SHA-256 OID so asn1.js can encode it
+  const SHA256_OID = '2 16 840 1 101 3 4 2 1'
+  if (!rfc3280.ALGORITHMS_IDS[SHA256_OID]) {
+    rfc3280.ALGORITHMS_IDS[SHA256_OID] = 'id-sha256'
+  }
+
+  // Replace GOST-34311 cert hash with SHA-256 in signingCertificateV2
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  certidSpec.SigningCertificateV2.wrap = function(cert: unknown, _hash: Buffer): Buffer {
+    const c = cert as { tbsCertificate: { issuer: unknown; serialNumber: unknown } }
+    const certDer = rfc3280.Certificate.encode(cert, 'der')
+    const sha256Hash = createHash('sha256').update(certDer).digest()
+    const idv2 = {
+      hashAlgorithm: { algorithm: 'id-sha256' },
+      certHash: sha256Hash,
+      issuerSerial: {
+        issuer: [{ type: 'directoryName', value: c.tbsCertificate.issuer }],
+        serialNumber: c.tbsCertificate.serialNumber,
+      },
+    }
+    return certidSpec.SigningCertificateV2.encode({ certs: [idv2] }, 'der')
+  }
+} catch {
+  // Non-fatal: if patch fails, signing still works (just with GOST cert hash in v2 attr)
+}
+
 export interface KepInfo {
   caName: string
   ownerName: string

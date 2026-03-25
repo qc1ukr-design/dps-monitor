@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
 import { loginWithKep } from '@/lib/dps/dps-auth'
+import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeDocuments } from '@/lib/dps/normalizer'
 import type { DocumentsList, IncomingDocument } from '@/lib/dps/types'
 
@@ -10,8 +11,9 @@ interface PageProps {
   params: Promise<{ id: string }>
 }
 
-const DPS_API = 'https://cabinet.tax.gov.ua/ws/api'
-const DPS_A   = 'https://cabinet.tax.gov.ua/ws/a'
+const DPS_BASE = 'https://cabinet.tax.gov.ua/ws/public_api'
+const DPS_API  = 'https://cabinet.tax.gov.ua/ws/api'
+const DPS_A    = 'https://cabinet.tax.gov.ua/ws/a'
 
 async function fetchDocuments(
   clientId: string,
@@ -33,10 +35,39 @@ async function fetchDocuments(
     return { documents: [], total: 0, noKep: true, isMock: true }
   }
 
+  let publicApiError = ''
   let kepError = ''
   let uuidError = ''
 
-  // ── Try KEP OAuth first ────────────────────────────────────────────────────
+  // ── Try ws/public_api with KEP Bearer (same auth as sync) ─────────────────
+  if (hasKep) {
+    try {
+      const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
+      const password = decrypt(tokenRow!.kep_password_encrypted)
+      const taxId = (tokenRow!.kep_tax_id ?? '').trim()
+
+      const kepAuth = await signWithKepDecrypted(kepDecrypted, password, taxId)
+
+      const res = await fetch(
+        `${DPS_BASE}/corr/correspondence?page=0&size=50`,
+        {
+          headers: { Authorization: kepAuth, Accept: 'application/json' },
+          signal: AbortSignal.timeout(15000),
+          cache: 'no-store',
+        }
+      )
+
+      if (res.ok) {
+        const raw = await res.json()
+        return { ...normalizeDocuments(raw), noKep: false, isMock: false }
+      }
+      publicApiError = `public_api HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 150)}`
+    } catch (e) {
+      publicApiError = String(e)
+    }
+  }
+
+  // ── Try KEP OAuth → ws/api ─────────────────────────────────────────────────
   if (hasKep) {
     try {
       const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
@@ -86,7 +117,11 @@ async function fetchDocuments(
     }
   }
 
-  const debugMsg = [kepError && `KEP: ${kepError}`, uuidError && `UUID: ${uuidError}`].filter(Boolean).join(' | ') || 'No tokens'
+  const debugMsg = [
+    publicApiError && `public_api: ${publicApiError}`,
+    kepError && `OAuth: ${kepError}`,
+    uuidError && `UUID: ${uuidError}`,
+  ].filter(Boolean).join(' | ') || 'No tokens'
   return { documents: [], total: 0, noKep: false, isMock: true, debugMsg }
 }
 

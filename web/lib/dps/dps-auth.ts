@@ -44,8 +44,9 @@ export async function loginWithKep(
   password: string,
   taxId: string
 ): Promise<DpsSession> {
-  const signature = await signWithKepDecrypted(kepDecrypted, password, taxId)
   const username = `${taxId}-${taxId}-${Date.now()}`
+  // Sign the full username string (not just taxId) — DPS OAuth verifies signature against username
+  const signature = await signWithKepDecrypted(kepDecrypted, password, username)
 
   const res = await fetch(DPS_OAUTH_URL, {
     method: 'POST',

@@ -16,7 +16,7 @@ const DPS_A   = 'https://cabinet.tax.gov.ua/ws/a'
 async function fetchDocuments(
   clientId: string,
   userId: string
-): Promise<DocumentsList & { noKep: boolean; isMock: boolean }> {
+): Promise<DocumentsList & { noKep: boolean; isMock: boolean; debugMsg?: string }> {
   const supabase = await createClient()
 
   const { data: tokenRow } = await supabase
@@ -32,6 +32,9 @@ async function fetchDocuments(
   if (!hasKep && !hasUuid) {
     return { documents: [], total: 0, noKep: true, isMock: true }
   }
+
+  let kepError = ''
+  let uuidError = ''
 
   // ── Try KEP OAuth first ────────────────────────────────────────────────────
   if (hasKep) {
@@ -55,8 +58,9 @@ async function fetchDocuments(
         const raw = await res.json()
         return { ...normalizeDocuments(raw), noKep: false, isMock: false }
       }
-    } catch {
-      // fall through to UUID token fallback
+      kepError = `OAuth OK but ws/api HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`
+    } catch (e) {
+      kepError = String(e)
     }
   }
 
@@ -76,12 +80,14 @@ async function fetchDocuments(
         const raw = await res.json()
         return { ...normalizeDocuments(raw), noKep: false, isMock: false }
       }
-    } catch {
-      // fall through
+      uuidError = `UUID HTTP ${res.status}`
+    } catch (e) {
+      uuidError = String(e)
     }
   }
 
-  return { documents: [], total: 0, noKep: false, isMock: true }
+  const debugMsg = [kepError && `KEP: ${kepError}`, uuidError && `UUID: ${uuidError}`].filter(Boolean).join(' | ') || 'No tokens'
+  return { documents: [], total: 0, noKep: false, isMock: true, debugMsg }
 }
 
 function statusBadge(status: IncomingDocument['status']) {
@@ -128,7 +134,7 @@ export default async function DocumentsPage({ params }: PageProps) {
 
   if (error || !client) notFound()
 
-  const { documents, total, noKep, isMock } = await fetchDocuments(id, user.id)
+  const { documents, total, noKep, isMock, debugMsg } = await fetchDocuments(id, user.id)
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">
@@ -183,6 +189,9 @@ export default async function DocumentsPage({ params }: PageProps) {
               відкрийте кабінет ДПС напряму →
             </a>
           </p>
+          {debugMsg && (
+            <p className="mt-2 font-mono text-xs text-red-600 break-all">{debugMsg}</p>
+          )}
         </div>
       )}
 

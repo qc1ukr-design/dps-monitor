@@ -35,6 +35,9 @@ async function fetchReports(
     return { reports: [], total: 0, noKep: true, isMock: true }
   }
 
+  let kepError = ''
+  let uuidError = ''
+
   // ── Try KEP OAuth first ────────────────────────────────────────────────────
   if (hasKep) {
     try {
@@ -57,8 +60,9 @@ async function fetchReports(
         const raw = await res.json()
         return { ...normalizeReports(raw), noKep: false, isMock: false }
       }
-    } catch {
-      // fall through to UUID token fallback
+      kepError = `OAuth OK but ws/api HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`
+    } catch (e) {
+      kepError = String(e)
     }
   }
 
@@ -78,12 +82,14 @@ async function fetchReports(
         const raw = await res.json()
         return { ...normalizeReports(raw), noKep: false, isMock: false }
       }
-    } catch {
-      // fall through
+      uuidError = `UUID HTTP ${res.status}`
+    } catch (e) {
+      uuidError = String(e)
     }
   }
 
-  return { reports: [], total: 0, noKep: false, isMock: true, debugError: hasKep ? 'KEP OAuth failed; UUID token also failed or absent.' : 'UUID token failed.' }
+  const debugError = [kepError && `KEP: ${kepError}`, uuidError && `UUID: ${uuidError}`].filter(Boolean).join(' | ') || 'No tokens'
+  return { reports: [], total: 0, noKep: false, isMock: true, debugError }
 }
 
 function statusBadge(status: TaxReport['status'], text: string) {

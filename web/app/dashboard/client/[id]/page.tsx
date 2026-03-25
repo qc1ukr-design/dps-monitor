@@ -109,7 +109,7 @@ export default async function ClientPage({ params }: PageProps) {
           </div>
           {lastSynced && (
             <span className="text-xs text-gray-400">
-              Оновлено: {lastSynced.toLocaleString('uk-UA')}
+              Оновлено: {lastSynced.toLocaleString('uk-UA', { timeZone: 'Europe/Kiev', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
             </span>
           )}
           {!kepConfigured && (

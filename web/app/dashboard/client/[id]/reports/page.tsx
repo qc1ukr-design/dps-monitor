@@ -83,7 +83,7 @@ function formatDate(s: string) {
   if (!s) return '—'
   const d = new Date(s)
   if (isNaN(d.getTime())) return s
-  return d.toLocaleDateString('uk-UA')
+  return d.toLocaleDateString('uk-UA', { timeZone: 'Europe/Kiev' })
 }
 
 const YEARS = [2026, 2025, 2024, 2023]

@@ -168,7 +168,7 @@ export default function ClientSettingsPage() {
               {kepUploadedInfo.caName && <div>АЦСК: {kepUploadedInfo.caName}</div>}
               {kepUploadedInfo.taxId && <div>Податковий номер: {kepUploadedInfo.taxId}</div>}
               {kepUploadedInfo.validTo && (
-                <div>Дійсний до: {new Date(kepUploadedInfo.validTo).toLocaleDateString('uk-UA')}</div>
+                <div>Дійсний до: {new Date(kepUploadedInfo.validTo).toLocaleDateString('uk-UA', { timeZone: 'Europe/Kiev' })}</div>
               )}
             </div>
             <div className="flex items-center gap-3 pt-1">
@@ -197,7 +197,7 @@ export default function ClientSettingsPage() {
             {kepStatus.taxId && <div className="text-blue-600">Податковий номер: {kepStatus.taxId}</div>}
             {kepStatus.validTo && (
               <div className="text-blue-600">
-                Дійсний до: {new Date(kepStatus.validTo).toLocaleDateString('uk-UA')}
+                Дійсний до: {new Date(kepStatus.validTo).toLocaleDateString('uk-UA', { timeZone: 'Europe/Kiev' })}
               </div>
             )}
             <button

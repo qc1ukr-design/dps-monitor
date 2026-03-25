@@ -93,7 +93,7 @@ export default function NewClientPage() {
             {created.taxId && <div>РНОКПП/ЄДРПОУ: <span className="font-medium">{created.taxId}</span></div>}
             {created.caName && <div>АЦСК: {created.caName}</div>}
             {created.validTo && (
-              <div>Ключ дійсний до: {new Date(created.validTo).toLocaleDateString('uk-UA')}</div>
+              <div>Ключ дійсний до: {new Date(created.validTo).toLocaleDateString('uk-UA', { timeZone: 'Europe/Kiev' })}</div>
             )}
           </div>
           <div className="pl-7 pt-1">

@@ -107,7 +107,7 @@ export default async function ClientsPage() {
                       )}
                       {lastSync && (
                         <span className="text-gray-400">
-                          · оновлено {new Date(lastSync).toLocaleDateString('uk-UA')}
+                          · оновлено {new Date(lastSync).toLocaleDateString('uk-UA', { timeZone: 'Europe/Kiev' })}
                         </span>
                       )}
                     </div>

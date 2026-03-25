@@ -2,9 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
-import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeReports } from '@/lib/dps/normalizer'
-import { MOCK_REPORTS } from '@/lib/dps/mock-data'
 import type { ReportsList, TaxReport } from '@/lib/dps/types'
 
 interface PageProps {
@@ -12,37 +10,33 @@ interface PageProps {
   searchParams: Promise<{ year?: string }>
 }
 
-const DPS_BASE = 'https://cabinet.tax.gov.ua/ws/public_api'
+const DPS_A = 'https://cabinet.tax.gov.ua/ws/a'
 
 async function fetchReports(
   clientId: string,
   userId: string,
   year: number
-): Promise<ReportsList & { noKep: boolean; isMock: boolean }> {
+): Promise<ReportsList & { noToken: boolean; isMock: boolean }> {
   const supabase = await createClient()
 
   const { data: tokenRow } = await supabase
     .from('api_tokens')
-    .select('kep_encrypted, kep_password_encrypted, kep_tax_id')
+    .select('token_encrypted')
     .eq('client_id', clientId)
     .eq('user_id', userId)
     .single()
 
-  if (!tokenRow?.kep_encrypted) {
-    return { ...MOCK_REPORTS, noKep: true, isMock: true }
+  if (!tokenRow?.token_encrypted) {
+    return { reports: [], total: 0, noToken: true, isMock: true }
   }
 
-  let authHeader: string
+  let token: string
   try {
-    const kepDecrypted = decrypt(tokenRow.kep_encrypted)
-    const password = decrypt(tokenRow.kep_password_encrypted)
-    const taxId = tokenRow.kep_tax_id?.trim() ?? ''
-    authHeader = await signWithKepDecrypted(kepDecrypted, password, taxId)
+    token = decrypt(tokenRow.token_encrypted).trim()
   } catch {
-    return { ...MOCK_REPORTS, noKep: false, isMock: true }
+    return { reports: [], total: 0, noToken: false, isMock: true }
   }
 
-  // Try known DPS report endpoints
   const endpoints = [
     `zvit/zvit_list?year=${year}`,
     `zvit/list?year=${year}`,
@@ -51,22 +45,20 @@ async function fetchReports(
 
   for (const endpoint of endpoints) {
     try {
-      const res = await fetch(`${DPS_BASE}/${endpoint}`, {
-        headers: { Authorization: authHeader, Accept: 'application/json' },
+      const res = await fetch(`${DPS_A}/${endpoint}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
         signal: AbortSignal.timeout(10000),
         cache: 'no-store',
       })
       if (res.ok) {
         const raw = await res.json()
         const normalized = normalizeReports(raw)
-        if (normalized.reports.length > 0) {
-          return { ...normalized, noKep: false, isMock: false }
-        }
+        return { ...normalized, noToken: false, isMock: false }
       }
     } catch { /* try next */ }
   }
 
-  return { ...MOCK_REPORTS, noKep: false, isMock: true }
+  return { reports: [], total: 0, noToken: false, isMock: true }
 }
 
 function statusBadge(status: TaxReport['status'], text: string) {
@@ -114,7 +106,7 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
     .single()
   if (error || !client) notFound()
 
-  const { reports, total, noKep, isMock } = await fetchReports(id, user.id, year)
+  const { reports, total, noToken, isMock } = await fetchReports(id, user.id, year)
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">
@@ -133,7 +125,7 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
           </div>
           {/* Year selector */}
           <div className="flex items-center gap-2">
-            {!isMock && (
+            {!isMock && total > 0 && (
               <span className="text-sm text-gray-500 mr-2">Всього: {total}</span>
             )}
             <div className="flex gap-1">
@@ -155,12 +147,13 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
         </div>
       </div>
 
-      {/* No KEP notice */}
-      {noKep && (
+      {/* No UUID token notice */}
+      {noToken && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 text-sm text-amber-800">
-          <p className="font-semibold mb-1">📋 КЕП не налаштовано</p>
+          <p className="font-semibold mb-1">📋 Токен ДПС не налаштовано</p>
           <p>
-            Для перегляду звітності потрібен КЕП. Налаштуйте його у{' '}
+            Для перегляду звітності потрібен UUID-токен з розділу{' '}
+            <strong>«Відкриті дані»</strong> в електронному кабінеті. Додайте його у{' '}
             <Link href={`/dashboard/client/${id}/settings`} className="underline font-medium hover:text-amber-900">
               Налаштуваннях
             </Link>
@@ -173,12 +166,12 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
         </div>
       )}
 
-      {/* Has KEP but fetch failed */}
-      {!noKep && isMock && (
+      {/* Has token but fetch failed */}
+      {!noToken && isMock && (
         <div className="bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-sm text-gray-700">
           <p className="font-semibold mb-1">⚠️ Не вдалося завантажити звітність</p>
           <p>
-            ДПС кабінет тимчасово недоступний. Спробуйте пізніше або{' '}
+            ДПС кабінет тимчасово недоступний або токен застарів. Спробуйте пізніше або{' '}
             <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
               className="underline font-medium hover:text-gray-900">
               відкрийте кабінет ДПС напряму →
@@ -194,14 +187,9 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
         </div>
       )}
 
-      {/* Reports table */}
-      {reports.length > 0 && (
+      {/* Reports table — only real data */}
+      {!isMock && reports.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          {isMock && (
-            <div className="px-5 py-2.5 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
-              <span className="text-xs text-amber-700 font-medium">Демо-дані — реальну звітність буде показано після підключення КЕП</span>
-            </div>
-          )}
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">

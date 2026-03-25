@@ -32,7 +32,6 @@ async function probe(url: string, authHeader: string, label: string) {
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const clientId = searchParams.get('clientId')
-  const refreshToken = searchParams.get('refreshToken')
   if (!clientId) return NextResponse.json({ error: 'clientId required' }, { status: 400 })
 
   const supabase = await createClient()

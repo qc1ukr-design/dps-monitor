@@ -64,99 +64,51 @@ export async function GET(request: NextRequest) {
 
   const year = new Date().getFullYear()
 
-  // Test all endpoints
+  // Standard endpoint probes (parallel)
   const results = await Promise.all([
-    // Known working
     probe(`${DPS_BASE}/payer_card`, kepAuth, 'KEP → public_api/payer_card'),
     probe(`${DPS_BASE}/ta/splatp?year=${year}`, kepAuth, `KEP → public_api/ta/splatp?year=${year}`),
-
-    // Reports candidates (KEP auth) — year param
     probe(`${DPS_BASE}/zvit/zvit_list?year=${year}`, kepAuth, `KEP → zvit/zvit_list?year=${year}`),
-    probe(`${DPS_BASE}/zvit/zvit_list?year=${year}&tin=${taxId}`, kepAuth, `KEP → zvit/zvit_list?year+tin`),
-    probe(`${DPS_BASE}/zvit/zvit_list?year=${year}&edrpou=${taxId}`, kepAuth, `KEP → zvit/zvit_list?year+edrpou`),
-
-    // Reports — date range format
-    probe(`${DPS_BASE}/zvit/zvit_list?dateBegin=01.01.${year}&dateEnd=31.12.${year}`, kepAuth, `KEP → zvit/zvit_list?dateBegin/dateEnd`),
-    probe(`${DPS_BASE}/zvit/zvit_list?dateBegin=01.01.${year}&dateEnd=31.12.${year}&tin=${taxId}`, kepAuth, `KEP → zvit/zvit_list?dates+tin`),
-
-    // Reports — alternative paths
-    probe(`${DPS_BASE}/zvit/zvit_list_short?dateBegin=01.01.${year}&dateEnd=31.12.${year}`, kepAuth, `KEP → zvit/zvit_list_short?dates`),
-    probe(`${DPS_BASE}/zvit/zvit_list_with_quart?year=${year}`, kepAuth, `KEP → zvit/zvit_list_with_quart`),
-    probe(`${DPS_BASE}/declarant/zvit_list?year=${year}`, kepAuth, `KEP → declarant/zvit_list?year`),
-
-    // Documents — try with ws/public_api (not ws/a)
     probe(`${DPS_BASE}/corr/correspondence?page=0&limit=20`, kepAuth, 'KEP → public_api/corr/correspondence'),
-
-    // KEP login → get OAuth tokens → test regdoc/list
-    ...await (async () => {
-      try {
-        // signWithKepDecrypted returns "Bearer <base64>", strip prefix for OAuth password
-        const bearerStr = kepAuth
-        const signature = bearerStr.startsWith('Bearer ') ? bearerStr.slice(7) : bearerStr
-        const idCabinet = Date.now()
-        const username = `${taxId}-${taxId}-${idCabinet}`
-        const loginRes = await fetch('https://cabinet.tax.gov.ua/ws/auth/oauth/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`,
-          signal: AbortSignal.timeout(20000),
-          cache: 'no-store',
-        })
-        const loginText = await loginRes.text()
-        const loginResult = { label: `KEP LOGIN → ws/auth/oauth/token (${loginRes.status})`, url: 'ws/auth/oauth/token', status: loginRes.status, ok: loginRes.ok, preview: loginText.slice(0, 300) }
-        if (!loginRes.ok) return [loginResult]
-        const tokens = JSON.parse(loginText)
-        const freshToken = tokens.access_token
-        return [
-          loginResult,
-          await probe(`${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${freshToken}`, `KEP+LOGIN → regdoc/list?periodYear=${year}`),
-          await probe(`${DPS_API}/corr/correspondence?page=0&size=20`, `Bearer ${freshToken}`, 'KEP+LOGIN → corr/correspondence'),
-        ]
-      } catch (e) {
-        return [{ label: 'KEP LOGIN → error', url: '', status: 0, ok: false, preview: String(e) }]
-      }
-    })(),
-
-    // Test refresh token endpoint (pass ?refreshToken=xxx to test)
-    ...(refreshToken ? await (async () => {
-      const refreshUrls = [
-        'https://cabinet.tax.gov.ua/ws/auth/oauth/token',
-        `${DPS_API}/oauth/token`,
-      ]
-      const results = []
-      for (const url of refreshUrls) {
-        try {
-          const r = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: `grant_type=refresh_token&refresh_token=${refreshToken}`,
-            signal: AbortSignal.timeout(8000),
-            cache: 'no-store',
-          })
-          const text = await r.text()
-          results.push({ label: `REFRESH → ${url.replace('https://cabinet.tax.gov.ua', '')} (${r.status})`, url, status: r.status, ok: r.ok, preview: text.slice(0, 200) })
-          // If refresh worked, test regdoc/list with fresh token
-          if (r.ok) {
-            try {
-              const parsed = JSON.parse(text)
-              if (parsed.access_token) {
-                results.push(await probe(`${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=15`, `Bearer ${parsed.access_token}`, `FRESH → regdoc/list`))
-              }
-            } catch { /* ignore */ }
-            break
-          }
-        } catch (e) {
-          results.push({ label: `REFRESH → ${url.replace('https://cabinet.tax.gov.ua', '')}`, url, status: 0, ok: false, preview: String(e) })
-        }
-      }
-      return results
-    })() : []),
   ])
+
+  // KEP OAuth login → get session token → test private API
+  const signature = kepAuth.startsWith('Bearer ') ? kepAuth.slice(7) : kepAuth
+  const username = `${taxId}-${taxId}-${Date.now()}`
+  let loginResult: { label: string; url: string; status: number; ok: boolean; preview: string }
+  let loginToken: string | null = null
+  try {
+    const loginRes = await fetch('https://cabinet.tax.gov.ua/ws/auth/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`,
+      signal: AbortSignal.timeout(20000),
+      cache: 'no-store',
+    })
+    const loginText = await loginRes.text()
+    loginResult = { label: `KEP LOGIN (${loginRes.status})`, url: 'ws/auth/oauth/token', status: loginRes.status, ok: loginRes.ok, preview: loginText.slice(0, 300) }
+    if (loginRes.ok) {
+      const tokens = JSON.parse(loginText)
+      loginToken = tokens.access_token ?? null
+    }
+  } catch (e) {
+    loginResult = { label: 'KEP LOGIN → error', url: 'ws/auth/oauth/token', status: 0, ok: false, preview: String(e) }
+  }
+
+  const loginProbes = loginToken ? await Promise.all([
+    probe(`${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${loginToken}`, `SESSION → regdoc/list`),
+    probe(`${DPS_API}/corr/correspondence?page=0&size=20`, `Bearer ${loginToken}`, 'SESSION → corr/correspondence'),
+    probe(`${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${loginToken}`, `SESSION → ws/a/regdoc/list`).then(
+      () => probe(`${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${loginToken!}`, `SESSION/a → regdoc/list`)
+    ),
+  ]) : []
+
+  const allResults = [...results, loginResult, ...loginProbes]
 
   return NextResponse.json({
     taxId,
     hasUuidToken: !!uuidToken,
-    results: results.map(r => ({
+    results: allResults.map(r => ({
       label: r.label,
       status: r.status,
       ok: r.ok,

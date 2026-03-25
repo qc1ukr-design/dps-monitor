@@ -212,11 +212,12 @@ export function normalizeDocuments(raw: unknown): DocumentsList {
     if (Array.isArray(r.documents)) {
       return raw as DocumentsList
     }
-  }
-
-  // Object with { count, data } shape
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    const r = raw as Record<string, unknown>
+    // Spring Boot Page: { content: [...], totalElements: N }
+    if (Array.isArray(r.content)) {
+      const docs = _mapDocumentRows(r.content as Record<string, unknown>[])
+      return { documents: docs, total: typeof r.totalElements === 'number' ? r.totalElements : docs.length }
+    }
+    // { count, data } shape
     if (Array.isArray(r.data)) {
       const docs = _mapDocumentRows(r.data as Record<string, unknown>[])
       return { documents: docs, total: typeof r.count === 'number' ? r.count : docs.length }
@@ -242,12 +243,13 @@ function _mapStatusCode(code: unknown): IncomingDocument['status'] {
 
 function _mapDocumentRows(arr: Record<string, unknown>[]): IncomingDocument[] {
   return arr.map((row, idx) => ({
+    // ws/api/corr/correspondence fields: id, num, dget, typeName, name, statusId, orgName, hasFiles
     id: str(row.id ?? row.docId ?? row.ID ?? String(idx)),
-    number: str(row.docNumber ?? row.number ?? row.DOC_NUMBER ?? row.NUM ?? ''),
-    date: str(row.docDate ?? row.date ?? row.DOC_DATE ?? row.DATE ?? ''),
-    type: str(row.docTypeName ?? row.type ?? row.DOC_TYPE_NAME ?? row.TYPE_NAME ?? ''),
-    subject: str(row.docName ?? row.subject ?? row.DOC_NAME ?? row.TITLE ?? ''),
-    status: _mapStatusCode(row.statusCode ?? row.status ?? row.STATUS_CODE ?? row.STATUS ?? '1'),
+    number: str(row.num ?? row.docNumber ?? row.number ?? row.DOC_NUMBER ?? row.NUM ?? ''),
+    date: str(row.dget ?? row.docDate ?? row.date ?? row.DOC_DATE ?? row.DATE ?? ''),
+    type: str(row.typeName ?? row.docTypeName ?? row.type ?? row.DOC_TYPE_NAME ?? row.TYPE_NAME ?? ''),
+    subject: str(row.name ?? row.docName ?? row.subject ?? row.DOC_NAME ?? row.TITLE ?? ''),
+    status: _mapStatusCode(row.statusId ?? row.statusCode ?? row.status ?? row.STATUS_CODE ?? row.STATUS ?? '1'),
     fromOrg: str(row.orgName ?? row.fromOrg ?? row.ORG_NAME ?? row.FROM_ORG ?? ''),
     hasAttachments: !!(row.hasFiles ?? row.hasAttachments ?? row.HAS_FILES ?? false),
   }))
@@ -268,6 +270,11 @@ export function normalizeReports(raw: unknown): ReportsList {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     const r = raw as Record<string, unknown>
     if (Array.isArray(r.reports)) return raw as ReportsList
+    // Spring Boot Page: { content: [...], totalElements: N }
+    if (Array.isArray(r.content)) {
+      const reports = _mapReportRows(r.content as Record<string, unknown>[])
+      return { reports, total: typeof r.totalElements === 'number' ? r.totalElements : reports.length }
+    }
     // { count, data } shape
     if (Array.isArray(r.data)) {
       const reports = _mapReportRows(r.data as Record<string, unknown>[])
@@ -287,14 +294,15 @@ function _mapReportRows(arr: Record<string, unknown>[]): TaxReport[] {
       row.statusName ?? row.status_name ?? row.STATUS_NAME ?? row.status ?? row.STATUS ?? ''
     )
     return {
+      // ws/api/regdoc/list fields: id, dname, formCode, dperiod, dget, statusName, dnum
       id: str(row.id ?? row.docId ?? row.ID ?? String(idx)),
-      name: str(row.name ?? row.docName ?? row.DOC_NAME ?? row.zvit_name ?? row.ZVIT_NAME ?? ''),
+      name: str(row.dname ?? row.name ?? row.docName ?? row.DOC_NAME ?? row.zvit_name ?? row.ZVIT_NAME ?? ''),
       formCode: str(row.formCode ?? row.form_code ?? row.FORM_CODE ?? row.kod_formy ?? row.KOD_FORMY ?? ''),
-      period: str(row.period ?? row.zvit_period ?? row.ZVIT_PERIOD ?? row.periodName ?? row.PERIOD_NAME ?? ''),
-      submittedAt: str(row.submittedAt ?? row.date_sub ?? row.DATE_SUB ?? row.docDate ?? row.DOC_DATE ?? ''),
+      period: str(row.dperiod ?? row.period ?? row.zvit_period ?? row.ZVIT_PERIOD ?? row.periodName ?? row.PERIOD_NAME ?? ''),
+      submittedAt: str(row.dget ?? row.submittedAt ?? row.date_sub ?? row.DATE_SUB ?? row.docDate ?? row.DOC_DATE ?? ''),
       status: _mapReportStatus(row.statusCode ?? row.STATUS_CODE, statusText),
       statusText: statusText || 'Невідомо',
-      regNumber: str(row.regNumber ?? row.reg_num ?? row.REG_NUM ?? row.docNumber ?? row.DOC_NUMBER ?? ''),
+      regNumber: str(row.dnum ?? row.regNumber ?? row.reg_num ?? row.REG_NUM ?? row.docNumber ?? row.DOC_NUMBER ?? ''),
     }
   })
 }

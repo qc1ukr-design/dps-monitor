@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
+import { loginWithKep } from '@/lib/dps/dps-auth'
 import { normalizeReports } from '@/lib/dps/normalizer'
 import type { ReportsList, TaxReport } from '@/lib/dps/types'
 
@@ -10,55 +11,52 @@ interface PageProps {
   searchParams: Promise<{ year?: string }>
 }
 
-const DPS_A = 'https://cabinet.tax.gov.ua/ws/a'
+const DPS_API = 'https://cabinet.tax.gov.ua/ws/api'
 
 async function fetchReports(
   clientId: string,
   userId: string,
   year: number
-): Promise<ReportsList & { noToken: boolean; isMock: boolean }> {
+): Promise<ReportsList & { noKep: boolean; isMock: boolean }> {
   const supabase = await createClient()
 
   const { data: tokenRow } = await supabase
     .from('api_tokens')
-    .select('token_encrypted')
+    .select('kep_encrypted, kep_password_encrypted, kep_tax_id')
     .eq('client_id', clientId)
     .eq('user_id', userId)
     .single()
 
-  if (!tokenRow?.token_encrypted) {
-    return { reports: [], total: 0, noToken: true, isMock: true }
+  if (!tokenRow?.kep_encrypted || !tokenRow?.kep_password_encrypted) {
+    return { reports: [], total: 0, noKep: true, isMock: true }
   }
 
-  let token: string
   try {
-    token = decrypt(tokenRow.token_encrypted).trim()
-  } catch {
-    return { reports: [], total: 0, noToken: false, isMock: true }
-  }
+    const kepDecrypted = decrypt(tokenRow.kep_encrypted)
+    const password = decrypt(tokenRow.kep_password_encrypted)
+    const taxId = (tokenRow.kep_tax_id ?? '').trim()
 
-  const endpoints = [
-    `zvit/zvit_list?year=${year}`,
-    `zvit/list?year=${year}`,
-    `payer/zvit?year=${year}`,
-  ]
+    const { accessToken } = await loginWithKep(kepDecrypted, password, taxId)
 
-  for (const endpoint of endpoints) {
-    try {
-      const res = await fetch(`${DPS_A}/${endpoint}`, {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-        signal: AbortSignal.timeout(10000),
+    const res = await fetch(
+      `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(15000),
         cache: 'no-store',
-      })
-      if (res.ok) {
-        const raw = await res.json()
-        const normalized = normalizeReports(raw)
-        return { ...normalized, noToken: false, isMock: false }
       }
-    } catch { /* try next */ }
+    )
+
+    if (res.ok) {
+      const raw = await res.json()
+      const normalized = normalizeReports(raw)
+      return { ...normalized, noKep: false, isMock: false }
+    }
+  } catch (e) {
+    console.warn('fetchReports error:', e)
   }
 
-  return { reports: [], total: 0, noToken: false, isMock: true }
+  return { reports: [], total: 0, noKep: false, isMock: true }
 }
 
 function statusBadge(status: TaxReport['status'], text: string) {
@@ -106,7 +104,7 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
     .single()
   if (error || !client) notFound()
 
-  const { reports, total, noToken, isMock } = await fetchReports(id, user.id, year)
+  const { reports, total, noKep, isMock } = await fetchReports(id, user.id, year)
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">
@@ -147,13 +145,12 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
         </div>
       </div>
 
-      {/* No UUID token notice */}
-      {noToken && (
+      {/* No KEP notice */}
+      {noKep && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 text-sm text-amber-800">
-          <p className="font-semibold mb-1">📋 Токен ДПС не налаштовано</p>
+          <p className="font-semibold mb-1">🔑 КЕП не налаштовано</p>
           <p>
-            Для перегляду звітності потрібен UUID-токен з розділу{' '}
-            <strong>«Відкриті дані»</strong> в електронному кабінеті. Додайте його у{' '}
+            Для перегляду звітності потрібен електронний підпис (КЕП). Додайте його у{' '}
             <Link href={`/dashboard/client/${id}/settings`} className="underline font-medium hover:text-amber-900">
               Налаштуваннях
             </Link>
@@ -166,12 +163,12 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
         </div>
       )}
 
-      {/* Has token but fetch failed */}
-      {!noToken && isMock && (
+      {/* Has KEP but fetch failed */}
+      {!noKep && isMock && (
         <div className="bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-sm text-gray-700">
           <p className="font-semibold mb-1">⚠️ Не вдалося завантажити звітність</p>
           <p>
-            ДПС кабінет тимчасово недоступний або токен застарів. Спробуйте пізніше або{' '}
+            ДПС кабінет тимчасово недоступний або КЕП застарів. Спробуйте пізніше або{' '}
             <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
               className="underline font-medium hover:text-gray-900">
               відкрийте кабінет ДПС напряму →

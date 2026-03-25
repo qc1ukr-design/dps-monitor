@@ -68,16 +68,22 @@ export async function GET(request: NextRequest) {
     probe(`${DPS_BASE}/payer_card`, kepAuth, 'KEP → public_api/payer_card'),
     probe(`${DPS_BASE}/ta/splatp?year=${year}`, kepAuth, `KEP → public_api/ta/splatp?year=${year}`),
 
-    // Reports candidates (KEP auth)
-    probe(`${DPS_BASE}/zvit/zvit_list?year=${year}`, kepAuth, `KEP → public_api/zvit/zvit_list?year=${year}`),
-    probe(`${DPS_BASE}/zvit/zvit_list_short?year=${year}`, kepAuth, `KEP → public_api/zvit/zvit_list_short?year=${year}`),
-    probe(`${DPS_BASE}/zvit/list?year=${year}`, kepAuth, `KEP → public_api/zvit/list?year=${year}`),
-    probe(`${DPS_BASE}/declarant/zvit?year=${year}`, kepAuth, `KEP → public_api/declarant/zvit?year=${year}`),
-    probe(`${DPS_BASE}/report/list?year=${year}`, kepAuth, `KEP → public_api/report/list?year=${year}`),
+    // Reports candidates (KEP auth) — year param
+    probe(`${DPS_BASE}/zvit/zvit_list?year=${year}`, kepAuth, `KEP → zvit/zvit_list?year=${year}`),
+    probe(`${DPS_BASE}/zvit/zvit_list?year=${year}&tin=${taxId}`, kepAuth, `KEP → zvit/zvit_list?year+tin`),
+    probe(`${DPS_BASE}/zvit/zvit_list?year=${year}&edrpou=${taxId}`, kepAuth, `KEP → zvit/zvit_list?year+edrpou`),
 
-    // Documents candidates (KEP auth)
-    probe(`${DPS_A}/corr/correspondence?page=0&limit=20`, kepAuth, 'KEP → ws/a/corr/correspondence'),
-    probe(`${DPS_A}/corr/list?page=0&limit=20`, kepAuth, 'KEP → ws/a/corr/list'),
+    // Reports — date range format
+    probe(`${DPS_BASE}/zvit/zvit_list?dateBegin=01.01.${year}&dateEnd=31.12.${year}`, kepAuth, `KEP → zvit/zvit_list?dateBegin/dateEnd`),
+    probe(`${DPS_BASE}/zvit/zvit_list?dateBegin=01.01.${year}&dateEnd=31.12.${year}&tin=${taxId}`, kepAuth, `KEP → zvit/zvit_list?dates+tin`),
+
+    // Reports — alternative paths
+    probe(`${DPS_BASE}/zvit/zvit_list_short?dateBegin=01.01.${year}&dateEnd=31.12.${year}`, kepAuth, `KEP → zvit/zvit_list_short?dates`),
+    probe(`${DPS_BASE}/zvit/zvit_list_with_quart?year=${year}`, kepAuth, `KEP → zvit/zvit_list_with_quart`),
+    probe(`${DPS_BASE}/declarant/zvit_list?year=${year}`, kepAuth, `KEP → declarant/zvit_list?year`),
+
+    // Documents — try with ws/public_api (not ws/a)
+    probe(`${DPS_BASE}/corr/correspondence?page=0&limit=20`, kepAuth, 'KEP → public_api/corr/correspondence'),
 
     // UUID token tests (if available)
     ...(uuidToken ? [

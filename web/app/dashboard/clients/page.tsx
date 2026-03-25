@@ -19,7 +19,7 @@ export default async function ClientsPage() {
     clientIds.length
       ? supabase
           .from('api_tokens')
-          .select('client_id, kep_ca_name, kep_owner_name, kep_tax_id')
+          .select('client_id, kep_ca_name, kep_owner_name, kep_tax_id, kep_valid_to')
           .in('client_id', clientIds)
           .eq('user_id', user!.id)
       : { data: [] },
@@ -44,6 +44,8 @@ export default async function ClientsPage() {
       syncMap.set(row.client_id, row.fetched_at)
     }
   }
+
+  const now = new Date()
 
   return (
     <div className="max-w-3xl mx-auto py-10 px-4">
@@ -81,6 +83,11 @@ export default async function ClientsPage() {
             const kep = kepMap.get(client.id)
             const kepConnected = !!kep?.kep_ca_name
             const lastSync = syncMap.get(client.id)
+            const kepValidTo = kep?.kep_valid_to ? new Date(kep.kep_valid_to) : null
+            const kepExpired = kepValidTo ? kepValidTo < now : false
+            const kepExpiringSoon = !kepExpired && kepValidTo
+              ? (kepValidTo.getTime() - now.getTime()) < 30 * 24 * 60 * 60 * 1000
+              : false
 
             return (
               <li key={client.id} className="group flex items-center gap-2">
@@ -91,7 +98,15 @@ export default async function ClientsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
                       <p className="font-semibold text-gray-900 truncate">{client.name}</p>
-                      {kepConnected ? (
+                      {kepConnected && kepExpired ? (
+                        <span className="shrink-0 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">
+                          KEP ✗
+                        </span>
+                      ) : kepConnected && kepExpiringSoon ? (
+                        <span className="shrink-0 text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+                          KEP !
+                        </span>
+                      ) : kepConnected ? (
                         <span className="shrink-0 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
                           KEP ✓
                         </span>

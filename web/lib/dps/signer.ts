@@ -294,11 +294,8 @@ async function fetchCertFromCA(box: InstanceType<typeof jk.Box>): Promise<Buffer
 
   const payload = (new Message({ type: 'data', data: ct })).as_asn1()
 
-  console.log('[CMP] Starting cert fetch, keyids count:', keyids.length)
-
   for (const server of CMP_SERVERS) {
     try {
-      console.log('[CMP] Trying server:', server)
       const response = await fetch(server, {
         method: 'POST',
         body: new Uint8Array(payload),
@@ -306,58 +303,38 @@ async function fetchCertFromCA(box: InstanceType<typeof jk.Box>): Promise<Buffer
         signal: (AbortSignal as any).timeout(8000),
       })
 
-      console.log('[CMP] Response status:', response.status, 'from', server)
       if (!response.ok) continue
 
       const bodyBuf = Buffer.from(await response.arrayBuffer())
-      console.log('[CMP] Response body length:', bodyBuf.length, 'first bytes:', bodyBuf.slice(0, 8).toString('hex'))
 
       // Parse outer envelope — type='data', info is raw Buffer
       let rmsg: { info: unknown }
-      try { rmsg = new Message(bodyBuf) } catch (e) {
-        console.log('[CMP] Failed to parse outer message:', e)
-        continue
-      }
+      try { rmsg = new Message(bodyBuf) } catch { continue }
 
       const infoBuf = rmsg.info as Buffer
-      console.log('[CMP] info is Buffer:', Buffer.isBuffer(infoBuf), 'length:', Buffer.isBuffer(infoBuf) ? infoBuf.length : 'n/a')
       if (!Buffer.isBuffer(infoBuf) || infoBuf.length < 8) continue
 
       // Result code at offset 4: 1 = success
-      const resultCode = infoBuf.readInt32LE(4)
-      console.log('[CMP] Result code:', resultCode)
-      if (resultCode !== 1) continue
+      if (infoBuf.readInt32LE(4) !== 1) continue
 
       // Parse inner message (skip 8-byte header) — signedData with certificate[]
       let rmsg2: { info: { certificate?: unknown[] } }
       try {
         rmsg2 = new Message(infoBuf.slice(8)) as { info: { certificate?: unknown[] } }
-      } catch (e) {
-        console.log('[CMP] Failed to parse inner message:', e)
-        continue
-      }
+      } catch { continue }
 
       const certDatas = rmsg2.info?.certificate
-      console.log('[CMP] certificate array length:', Array.isArray(certDatas) ? certDatas.length : 'not array')
       if (!Array.isArray(certDatas) || certDatas.length === 0) continue
 
       const certBuffers: Buffer[] = []
       for (const certData of certDatas) {
-        try {
-          certBuffers.push(new JkCertificate(certData).as_asn1())
-        } catch (e) {
-          console.log('[CMP] Failed to parse cert:', e)
-        }
+        try { certBuffers.push(new JkCertificate(certData).as_asn1()) } catch { /* skip */ }
       }
 
-      console.log('[CMP] Extracted cert buffers:', certBuffers.length)
       if (certBuffers.length > 0) return certBuffers
-    } catch (e) {
-      console.log('[CMP] Error with server', server, ':', e)
-    }
+    } catch { /* try next server */ }
   }
 
-  console.log('[CMP] All servers failed, returning empty')
   return []
 }
 
@@ -622,27 +599,6 @@ export async function signWithKepDecrypted(
   data: string | Buffer
 ): Promise<string> {
   const box = await loadBoxFromDecrypted(kepDecrypted, password)
-  const dataBuffer = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8')
-
-  const message = await box.sign(dataBuffer, undefined, null, {
-    tsp: false,
-    detached: false,
-  })
-
-  const asn1 = (message as { as_asn1: () => Buffer }).as_asn1()
-  return asn1.toString('base64')
-}
-
-/**
- * Sign `data` with the KEP private key from a single buffer.
- * @deprecated Prefer signWithKepDecrypted when loading KEP from DB.
- */
-export async function signWithKep(
-  pfxBuffer: Buffer,
-  password: string,
-  data: string | Buffer
-): Promise<string> {
-  const box = await loadBox(pfxBuffer, password)
   const dataBuffer = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8')
 
   const message = await box.sign(dataBuffer, undefined, null, {

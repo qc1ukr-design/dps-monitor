@@ -1,0 +1,100 @@
+/**
+ * GET /api/debug/dps-endpoints?clientId=XXX
+ *
+ * Tests all known DPS API endpoints for a given client with KEP auth.
+ * Returns status codes + response previews to diagnose what works.
+ * REMOVE THIS ROUTE BEFORE PRODUCTION LAUNCH.
+ */
+import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
+import { decrypt } from '@/lib/crypto'
+import { signWithKepDecrypted } from '@/lib/dps/signer'
+
+const DPS_BASE = 'https://cabinet.tax.gov.ua/ws/public_api'
+const DPS_A    = 'https://cabinet.tax.gov.ua/ws/a'
+
+async function probe(url: string, authHeader: string, label: string) {
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: authHeader, Accept: 'application/json' },
+      signal: AbortSignal.timeout(12000),
+      cache: 'no-store',
+    })
+    const text = await res.text().catch(() => '')
+    const preview = text.slice(0, 300)
+    return { label, url, status: res.status, ok: res.ok, preview }
+  } catch (e) {
+    return { label, url, status: 0, ok: false, preview: String(e) }
+  }
+}
+
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url)
+  const clientId = searchParams.get('clientId')
+  if (!clientId) return NextResponse.json({ error: 'clientId required' }, { status: 400 })
+
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const { data: tokenRow } = await supabase
+    .from('api_tokens')
+    .select('kep_encrypted, kep_password_encrypted, kep_tax_id, token_encrypted')
+    .eq('client_id', clientId)
+    .eq('user_id', user.id)
+    .single()
+
+  if (!tokenRow?.kep_encrypted) {
+    return NextResponse.json({ error: 'No KEP configured for this client' }, { status: 404 })
+  }
+
+  // Build KEP auth header
+  const kepDecrypted = decrypt(tokenRow.kep_encrypted)
+  const password = decrypt(tokenRow.kep_password_encrypted)
+  const taxId = (tokenRow.kep_tax_id ?? '').trim()
+  const kepAuth = await signWithKepDecrypted(kepDecrypted, password, taxId)
+
+  // UUID token (if available)
+  let uuidToken: string | null = null
+  if (tokenRow.token_encrypted) {
+    try { uuidToken = decrypt(tokenRow.token_encrypted).trim() } catch { /* ignore */ }
+  }
+
+  const year = new Date().getFullYear()
+
+  // Test all endpoints
+  const results = await Promise.all([
+    // Known working
+    probe(`${DPS_BASE}/payer_card`, kepAuth, 'KEP → public_api/payer_card'),
+    probe(`${DPS_BASE}/ta/splatp?year=${year}`, kepAuth, `KEP → public_api/ta/splatp?year=${year}`),
+
+    // Reports candidates (KEP auth)
+    probe(`${DPS_BASE}/zvit/zvit_list?year=${year}`, kepAuth, `KEP → public_api/zvit/zvit_list?year=${year}`),
+    probe(`${DPS_BASE}/zvit/zvit_list_short?year=${year}`, kepAuth, `KEP → public_api/zvit/zvit_list_short?year=${year}`),
+    probe(`${DPS_BASE}/zvit/list?year=${year}`, kepAuth, `KEP → public_api/zvit/list?year=${year}`),
+    probe(`${DPS_BASE}/declarant/zvit?year=${year}`, kepAuth, `KEP → public_api/declarant/zvit?year=${year}`),
+    probe(`${DPS_BASE}/report/list?year=${year}`, kepAuth, `KEP → public_api/report/list?year=${year}`),
+
+    // Documents candidates (KEP auth)
+    probe(`${DPS_A}/corr/correspondence?page=0&limit=20`, kepAuth, 'KEP → ws/a/corr/correspondence'),
+    probe(`${DPS_A}/corr/list?page=0&limit=20`, kepAuth, 'KEP → ws/a/corr/list'),
+
+    // UUID token tests (if available)
+    ...(uuidToken ? [
+      probe(`${DPS_A}/corr/correspondence?page=0&limit=20`, `Bearer ${uuidToken}`, 'UUID → ws/a/corr/correspondence'),
+      probe(`${DPS_A}/zvit/zvit_list?year=${year}`, `Bearer ${uuidToken}`, `UUID → ws/a/zvit/zvit_list?year=${year}`),
+      probe(`${DPS_A}/zvit/zvit_list_short?year=${year}`, `Bearer ${uuidToken}`, `UUID → ws/a/zvit/zvit_list_short?year=${year}`),
+    ] : []),
+  ])
+
+  return NextResponse.json({
+    taxId,
+    hasUuidToken: !!uuidToken,
+    results: results.map(r => ({
+      label: r.label,
+      status: r.status,
+      ok: r.ok,
+      preview: r.preview,
+    })),
+  })
+}

@@ -12,6 +12,7 @@ import { signWithKepDecrypted } from '@/lib/dps/signer'
 
 const DPS_BASE = 'https://cabinet.tax.gov.ua/ws/public_api'
 const DPS_A    = 'https://cabinet.tax.gov.ua/ws/a'
+const DPS_API  = 'https://cabinet.tax.gov.ua/ws/api'
 
 async function probe(url: string, authHeader: string, label: string) {
   try {
@@ -86,39 +87,47 @@ export async function GET(request: NextRequest) {
     // Documents — try with ws/public_api (not ws/a)
     probe(`${DPS_BASE}/corr/correspondence?page=0&limit=20`, kepAuth, 'KEP → public_api/corr/correspondence'),
 
-    // UUID token tests (if available)
+    // UUID token tests against correct /ws/api/ backend
     ...(uuidToken ? [
-      // Correct reports endpoint (discovered via browser DevTools)
-      probe(`${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${uuidToken}`, `UUID → regdoc/list?periodYear=${year}`),
-      probe(`${DPS_A}/corr/correspondence?page=0&limit=20`, `Bearer ${uuidToken}`, 'UUID → corr/correspondence'),
+      probe(`${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${uuidToken}`, `UUID/api → regdoc/list?periodYear=${year}`),
+      probe(`${DPS_API}/corr/correspondence?page=0&size=20`, `Bearer ${uuidToken}`, 'UUID/api → corr/correspondence'),
     ] : []),
 
     // Test refresh token endpoint (pass ?refreshToken=xxx to test)
     ...(refreshToken ? await (async () => {
-      try {
-        const r = await fetch(`${DPS_A}/oauth/token`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: `grant_type=refresh_token&refresh_token=${refreshToken}`,
-          signal: AbortSignal.timeout(10000),
-          cache: 'no-store',
-        })
-        const text = await r.text()
-        // If refresh worked, try regdoc/list with new access token
-        let regdocResult = null
+      const refreshUrls = [
+        `${DPS_API}/oauth/token`,
+        `${DPS_API}/auth/token`,
+        `${DPS_API}/token`,
+        `${DPS_BASE}/oauth/token`,
+      ]
+      const results = []
+      for (const url of refreshUrls) {
         try {
-          const parsed = JSON.parse(text)
-          if (parsed.access_token) {
-            regdocResult = await probe(`${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${parsed.access_token}`, `FRESH_TOKEN → regdoc/list`)
+          const r = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `grant_type=refresh_token&refresh_token=${refreshToken}`,
+            signal: AbortSignal.timeout(8000),
+            cache: 'no-store',
+          })
+          const text = await r.text()
+          results.push({ label: `REFRESH → ${url.replace('https://cabinet.tax.gov.ua', '')} (${r.status})`, url, status: r.status, ok: r.ok, preview: text.slice(0, 200) })
+          // If refresh worked, test regdoc/list with fresh token
+          if (r.ok) {
+            try {
+              const parsed = JSON.parse(text)
+              if (parsed.access_token) {
+                results.push(await probe(`${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=15`, `Bearer ${parsed.access_token}`, `FRESH → regdoc/list`))
+              }
+            } catch { /* ignore */ }
+            break
           }
-        } catch { /* ignore */ }
-        return [
-          { label: `REFRESH → oauth/token (status ${r.status})`, url: `${DPS_A}/oauth/token`, status: r.status, ok: r.ok, preview: text.slice(0, 300) },
-          ...(regdocResult ? [regdocResult] : []),
-        ]
-      } catch (e) {
-        return [{ label: 'REFRESH → oauth/token', url: `${DPS_A}/oauth/token`, status: 0, ok: false, preview: String(e) }]
+        } catch (e) {
+          results.push({ label: `REFRESH → ${url.replace('https://cabinet.tax.gov.ua', '')}`, url, status: 0, ok: false, preview: String(e) })
+        }
       }
+      return results
     })() : []),
   ])
 

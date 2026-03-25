@@ -40,6 +40,14 @@ export default async function ClientPage({ params }: PageProps) {
 
   const kepConfigured = !!tokenRow?.kep_ca_name
 
+  // KEP expiry check
+  const kepValidTo = tokenRow?.kep_valid_to ? new Date(tokenRow.kep_valid_to) : null
+  const now = new Date()
+  const kepExpired = kepValidTo ? kepValidTo < now : false
+  const kepExpiringSoon = !kepExpired && kepValidTo
+    ? (kepValidTo.getTime() - now.getTime()) < 30 * 24 * 60 * 60 * 1000
+    : false
+
   // Load cached DPS data + unread alerts in parallel
   const [cacheResult, alertsResult] = await Promise.all([
     supabase
@@ -119,6 +127,32 @@ export default async function ClientPage({ params }: PageProps) {
           )}
         </div>
       </div>
+
+      {/* ── KEP expiry warning ───────────────────────────────────────────── */}
+      {kepExpired && (
+        <div className="bg-red-50 border border-red-200 rounded-xl px-5 py-3 text-sm text-red-800 flex items-center justify-between">
+          <span>
+            <strong>КЕП протермінований</strong> — дійсний до{' '}
+            {kepValidTo!.toLocaleDateString('uk-UA', { timeZone: 'Europe/Kiev' })}.
+            Синхронізація недоступна.
+          </span>
+          <Link href={`/dashboard/client/${id}/settings`} className="text-red-600 underline underline-offset-2 font-medium hover:text-red-800 ml-4 whitespace-nowrap">
+            Оновити KEP →
+          </Link>
+        </div>
+      )}
+      {kepExpiringSoon && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 text-sm text-amber-800 flex items-center justify-between">
+          <span>
+            <strong>КЕП закінчується</strong>{' '}
+            {kepValidTo!.toLocaleDateString('uk-UA', { timeZone: 'Europe/Kiev' })}.
+            Оновіть ключ заздалегідь.
+          </span>
+          <Link href={`/dashboard/client/${id}/settings`} className="text-amber-600 underline underline-offset-2 font-medium hover:text-amber-900 ml-4 whitespace-nowrap">
+            Оновити KEP →
+          </Link>
+        </div>
+      )}
 
       {/* ── Unread alerts banner ─────────────────────────────────────────── */}
       {unreadAlerts.length > 0 && (

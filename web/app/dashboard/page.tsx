@@ -64,7 +64,7 @@ export default async function DashboardPage() {
     clientIds.length
       ? supabase
           .from('api_tokens')
-          .select('client_id, kep_owner_name')
+          .select('client_id, kep_owner_name, kep_valid_to')
           .eq('user_id', user.id)
           .not('kep_encrypted', 'is', null)
       : { data: [] },
@@ -74,6 +74,8 @@ export default async function DashboardPage() {
   const tokens = tokenResult.data ?? []
 
   const kepClientIds = new Set(tokens.map(t => t.client_id))
+  const kepTokenMap = new Map(tokens.map(t => [t.client_id, t]))
+  const dashboardNow = new Date()
 
   // Build per-client data
   type ClientRow = {
@@ -84,6 +86,8 @@ export default async function DashboardPage() {
     totalDebt: number
     totalOverpayment: number
     hasKep: boolean
+    kepExpired: boolean
+    kepExpiringSoon: boolean
     lastSynced: string | null
   }
 
@@ -106,6 +110,13 @@ export default async function DashboardPage() {
       ? times.reduce((a, b) => (new Date(a) > new Date(b) ? a : b))
       : null
 
+    const token = kepTokenMap.get(c.id)
+    const kepValidTo = token?.kep_valid_to ? new Date(token.kep_valid_to) : null
+    const kepExpired = kepValidTo ? kepValidTo < dashboardNow : false
+    const kepExpiringSoon = !kepExpired && kepValidTo
+      ? (kepValidTo.getTime() - dashboardNow.getTime()) < 30 * 24 * 60 * 60 * 1000
+      : false
+
     return {
       id: c.id,
       name: c.name,
@@ -114,6 +125,8 @@ export default async function DashboardPage() {
       totalDebt,
       totalOverpayment,
       hasKep: kepClientIds.has(c.id),
+      kepExpired,
+      kepExpiringSoon,
       lastSynced,
     }
   })
@@ -267,21 +280,33 @@ export default async function DashboardPage() {
 
                         {/* Action */}
                         <td className="px-4 py-3.5 text-center">
-                          {row.hasKep ? (
-                            <Link
-                              href={`/dashboard/client/${row.id}`}
-                              className="inline-block text-xs bg-blue-50 text-blue-600 border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-100 transition font-medium"
-                            >
-                              Переглянути
-                            </Link>
-                          ) : (
-                            <Link
-                              href={`/dashboard/client/${row.id}/settings`}
-                              className="inline-block text-xs bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1 rounded-lg hover:bg-amber-100 transition font-medium whitespace-nowrap"
-                            >
-                              Налаштувати КЕП
-                            </Link>
-                          )}
+                          <div className="flex flex-col items-center gap-1">
+                            {row.hasKep ? (
+                              <Link
+                                href={`/dashboard/client/${row.id}`}
+                                className="inline-block text-xs bg-blue-50 text-blue-600 border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-100 transition font-medium"
+                              >
+                                Переглянути
+                              </Link>
+                            ) : (
+                              <Link
+                                href={`/dashboard/client/${row.id}/settings`}
+                                className="inline-block text-xs bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1 rounded-lg hover:bg-amber-100 transition font-medium whitespace-nowrap"
+                              >
+                                Налаштувати КЕП
+                              </Link>
+                            )}
+                            {row.kepExpired && (
+                              <Link href={`/dashboard/client/${row.id}/settings`} className="text-xs text-red-500 hover:text-red-700 whitespace-nowrap">
+                                ⚠ КЕП прострочено
+                              </Link>
+                            )}
+                            {row.kepExpiringSoon && (
+                              <Link href={`/dashboard/client/${row.id}/settings`} className="text-xs text-amber-500 hover:text-amber-700 whitespace-nowrap">
+                                ⚠ КЕП закінчується
+                              </Link>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}

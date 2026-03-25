@@ -113,12 +113,13 @@ function formatDate(s: string) {
   return d.toLocaleDateString('uk-UA', { timeZone: 'Europe/Kiev' })
 }
 
-const YEARS = [2026, 2025, 2024, 2023]
+const CURRENT_YEAR = new Date().getFullYear()
+const YEARS = Array.from({ length: 4 }, (_, i) => CURRENT_YEAR - i)
 
 export default async function ReportsPage({ params, searchParams }: PageProps) {
   const { id } = await params
   const { year: yearParam } = await searchParams
-  const year = Number(yearParam) || new Date().getFullYear()
+  const year = Number(yearParam) || CURRENT_YEAR
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -253,6 +254,16 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
               ))}
             </tbody>
           </table>
+          {total > reports.length && (
+            <div className="px-4 py-3 text-xs text-gray-400 border-t border-gray-100 text-center">
+              Показано {reports.length} з {total} звітів. Відкрийте{' '}
+              <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
+                className="underline hover:text-gray-600">
+                Кабінет ДПС
+              </a>{' '}
+              для перегляду всіх.
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -234,6 +234,16 @@ export default async function DocumentsPage({ params }: PageProps) {
               ))}
             </tbody>
           </table>
+          {total > documents.length && (
+            <div className="px-4 py-3 text-xs text-gray-400 border-t border-gray-100 text-center">
+              Показано {documents.length} з {total} документів. Відкрийте{' '}
+              <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
+                className="underline hover:text-gray-600">
+                Кабінет ДПС
+              </a>{' '}
+              для перегляду всіх.
+            </div>
+          )}
         </div>
       )}
     </div>

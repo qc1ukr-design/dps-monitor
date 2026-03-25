@@ -87,9 +87,12 @@ export async function GET(request: NextRequest) {
 
     // UUID token tests (if available)
     ...(uuidToken ? [
-      probe(`${DPS_A}/corr/correspondence?page=0&limit=20`, `Bearer ${uuidToken}`, 'UUID → ws/a/corr/correspondence'),
-      probe(`${DPS_A}/zvit/zvit_list?year=${year}`, `Bearer ${uuidToken}`, `UUID → ws/a/zvit/zvit_list?year=${year}`),
-      probe(`${DPS_A}/zvit/zvit_list_short?year=${year}`, `Bearer ${uuidToken}`, `UUID → ws/a/zvit/zvit_list_short?year=${year}`),
+      // Correct reports endpoint (discovered via browser DevTools)
+      probe(`${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${uuidToken}`, `UUID → regdoc/list?periodYear=${year}`),
+      probe(`${DPS_A}/regdoc/list?periodYear=${year - 1}&page=0&size=15&sort=dget,desc`, `Bearer ${uuidToken}`, `UUID → regdoc/list?periodYear=${year - 1}`),
+      // Correspondence
+      probe(`${DPS_A}/corr/correspondence?page=0&limit=20`, `Bearer ${uuidToken}`, 'UUID → corr/correspondence'),
+      probe(`${DPS_A}/corr/list?page=0&size=20`, `Bearer ${uuidToken}`, 'UUID → corr/list'),
     ] : []),
   ])
 

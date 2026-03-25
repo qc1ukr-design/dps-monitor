@@ -543,12 +543,28 @@ function getSigningKey(box: InstanceType<typeof jk.Box>): {
   )
 }
 
+/** Safely convert any date-like value jkurwa might return to ISO string. */
+function parseCertDate(d: unknown): string {
+  if (!d) return ''
+  if (d instanceof Date) return isNaN(d.getTime()) ? '' : d.toISOString()
+  if (typeof d === 'number') return new Date(d).toISOString()
+  if (typeof d === 'string') {
+    const p = new Date(d)
+    return isNaN(p.getTime()) ? d : p.toISOString()
+  }
+  if (typeof (d as Date).getTime === 'function') {
+    const t = (d as Date).getTime()
+    return isNaN(t) ? '' : new Date(t).toISOString()
+  }
+  return ''
+}
+
 /**
  * Extract KepInfo from a jkurwa certificate object.
  */
 function extractCertInfo(cert: InstanceType<typeof jk.Certificate>): KepInfo {
   const subj = cert.subject as Record<string, string>
-  const validity = cert.validity as { notBefore: Date; notAfter: Date }
+  const validity = cert.validity as { notBefore: unknown; notAfter: unknown }
   const issuer = cert.issuer as Record<string, string>
 
   const rawSerial = subj.serialNumber ?? ''
@@ -564,8 +580,8 @@ function extractCertInfo(cert: InstanceType<typeof jk.Certificate>): KepInfo {
       subj.organizationName ||
       'Невідомо',
     serial: (cert.serial as Buffer | undefined)?.toString('hex') ?? '',
-    validFrom: validity?.notBefore?.toISOString() ?? '',
-    validTo: validity?.notAfter?.toISOString() ?? '',
+    validFrom: parseCertDate(validity?.notBefore),
+    validTo: parseCertDate(validity?.notAfter),
     taxId,
   }
 }

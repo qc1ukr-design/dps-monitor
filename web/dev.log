@@ -1,0 +1,31 @@
+
+> web@0.1.0 dev
+> next dev
+
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 3.6s
+ ✓ Compiled /middleware in 463ms (122 modules)
+ ○ Compiling /dashboard ...
+ ✓ Compiled /dashboard in 4.8s (626 modules)
+ ✓ Compiled in 418ms (265 modules)
+ GET /dashboard 200 in 6905ms
+<w> [webpack.cache.PackFileCacheStrategy] Serializing big strings (140kiB) impacts deserialization performance (consider using Buffer instead and decode when needed)
+ ○ Compiling /favicon.ico ...
+ ✓ Compiled /favicon.ico in 1424ms (375 modules)
+ GET /favicon.ico 200 in 1523ms
+ ○ Compiling /dashboard/client/[id] ...
+ ✓ Compiled /dashboard/client/[id] in 704ms (615 modules)
+ GET /dashboard/client/078efd9d-86d5-45cc-ab63-125e30b37c31 200 in 3234ms
+ ✓ Compiled /dashboard/alerts in 479ms (619 modules)
+ GET /dashboard/alerts 200 in 1980ms
+ ✓ Compiled in 802ms (633 modules)
+ ✓ Compiled in 204ms (272 modules)
+ ✓ Compiled in 769ms (638 modules)
+ ✓ Compiled in 643ms (741 modules)
+ ✓ Compiled in 412ms (633 modules)
+ ✓ Compiled in 354ms (633 modules)
+ ✓ Compiled in 544ms (633 modules)

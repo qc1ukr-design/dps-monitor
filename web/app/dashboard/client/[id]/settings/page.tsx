@@ -306,7 +306,7 @@ export default function ClientSettingsPage() {
         <div>
           <h2 className="font-semibold text-gray-900">UUID-токен ДПС</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            Потрібен для «Вхідної документації» та «Звітності». Зберігається зашифровано.
+            Резервний метод доступу до документів та звітності (якщо КЕП не спрацьовує). Зберігається зашифровано.
           </p>
         </div>
 

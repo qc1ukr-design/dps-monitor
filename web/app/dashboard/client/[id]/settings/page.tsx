@@ -12,6 +12,10 @@ interface KepStatus {
   taxId?: string
 }
 
+interface TokenStatus {
+  configured: boolean
+}
+
 export default function ClientSettingsPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
@@ -26,12 +30,48 @@ export default function ClientSettingsPage() {
   const [showReplaceForm, setShowReplaceForm] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
 
+  const [tokenValue, setTokenValue] = useState('')
+  const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null)
+  const [tokenLoading, setTokenLoading] = useState(false)
+  const [tokenError, setTokenError] = useState('')
+  const [tokenSaved, setTokenSaved] = useState(false)
+
   useEffect(() => {
     fetch(`/api/clients/${id}/kep`)
       .then(r => r.json())
       .then(setKepStatus)
       .catch(() => {})
+    fetch(`/api/clients/${id}/token`)
+      .then(r => r.json())
+      .then(setTokenStatus)
+      .catch(() => {})
   }, [id])
+
+  async function handleSaveToken(e: React.FormEvent) {
+    e.preventDefault()
+    setTokenError('')
+    setTokenSaved(false)
+    if (!tokenValue.trim()) { setTokenError('Введіть токен'); return }
+    setTokenLoading(true)
+    const res = await fetch(`/api/clients/${id}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: tokenValue }),
+    })
+    setTokenLoading(false)
+    const json = await res.json()
+    if (!res.ok) { setTokenError(json.error); return }
+    setTokenStatus({ configured: true })
+    setTokenSaved(true)
+    setTokenValue('')
+  }
+
+  async function handleDeleteToken() {
+    if (!confirm('Видалити UUID-токен?')) return
+    await fetch(`/api/clients/${id}/token`, { method: 'DELETE' })
+    setTokenStatus({ configured: false })
+    setTokenSaved(false)
+  }
 
   async function handleUploadKep(e: React.FormEvent) {
     e.preventDefault()
@@ -259,6 +299,62 @@ export default function ClientSettingsPage() {
             </button>
           </form>
         )}
+      </div>
+
+      {/* UUID token section */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+        <div>
+          <h2 className="font-semibold text-gray-900">UUID-токен ДПС</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Потрібен для «Вхідної документації» та «Звітності». Зберігається зашифровано.
+          </p>
+        </div>
+
+        {tokenStatus?.configured && !tokenSaved && (
+          <div className="bg-blue-50 rounded-lg px-4 py-3 text-sm flex items-center justify-between">
+            <span className="text-blue-800 font-medium">Токен налаштовано</span>
+            <button
+              onClick={handleDeleteToken}
+              className="text-xs text-red-400 hover:text-red-600 underline underline-offset-2"
+            >
+              Видалити
+            </button>
+          </div>
+        )}
+
+        {tokenSaved && (
+          <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-800">
+            Токен збережено успішно!
+          </div>
+        )}
+
+        <form onSubmit={handleSaveToken} className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              {tokenStatus?.configured ? 'Замінити токен' : 'Токен'} <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              value={tokenValue}
+              onChange={e => setTokenValue(e.target.value)}
+              placeholder="Вставте UUID-токен з кабінету ДПС"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Кабінет ДПС → Профіль → Відкриті дані → скопіюйте токен доступу.
+            </p>
+          </div>
+          {tokenError && (
+            <div className="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-lg">{tokenError}</div>
+          )}
+          <button
+            type="submit"
+            disabled={tokenLoading}
+            className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-60 transition"
+          >
+            {tokenLoading ? 'Збереження...' : tokenStatus?.configured ? 'Замінити токен' : 'Зберегти токен'}
+          </button>
+        </form>
       </div>
 
       {/* Delete — subtle link, not scary red block */}

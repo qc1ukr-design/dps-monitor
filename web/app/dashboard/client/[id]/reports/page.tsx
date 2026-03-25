@@ -17,7 +17,7 @@ async function fetchReports(
   clientId: string,
   userId: string,
   year: number
-): Promise<ReportsList & { noKep: boolean; isMock: boolean }> {
+): Promise<ReportsList & { noKep: boolean; isMock: boolean; debugError?: string }> {
   const supabase = await createClient()
 
   const { data: tokenRow } = await supabase
@@ -52,11 +52,11 @@ async function fetchReports(
       const normalized = normalizeReports(raw)
       return { ...normalized, noKep: false, isMock: false }
     }
+    const errText = await res.text().catch(() => '')
+    return { reports: [], total: 0, noKep: false, isMock: true, debugError: `regdoc ${res.status}: ${errText.slice(0, 300)}` }
   } catch (e) {
-    console.warn('fetchReports error:', e)
+    return { reports: [], total: 0, noKep: false, isMock: true, debugError: String(e).slice(0, 300) }
   }
-
-  return { reports: [], total: 0, noKep: false, isMock: true }
 }
 
 function statusBadge(status: TaxReport['status'], text: string) {
@@ -104,7 +104,7 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
     .single()
   if (error || !client) notFound()
 
-  const { reports, total, noKep, isMock } = await fetchReports(id, user.id, year)
+  const { reports, total, noKep, isMock, debugError } = await fetchReports(id, user.id, year)
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">
@@ -174,6 +174,9 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
               відкрийте кабінет ДПС напряму →
             </a>
           </p>
+          {debugError && (
+            <p className="mt-2 font-mono text-xs text-red-600 break-all">{debugError}</p>
+          )}
         </div>
       )}
 

@@ -12,6 +12,7 @@ interface PageProps {
 }
 
 const DPS_API = 'https://cabinet.tax.gov.ua/ws/api'
+const DPS_A   = 'https://cabinet.tax.gov.ua/ws/a'
 
 async function fetchReports(
   clientId: string,
@@ -22,41 +23,67 @@ async function fetchReports(
 
   const { data: tokenRow } = await supabase
     .from('api_tokens')
-    .select('kep_encrypted, kep_password_encrypted, kep_tax_id')
+    .select('kep_encrypted, kep_password_encrypted, kep_tax_id, token_encrypted')
     .eq('client_id', clientId)
     .eq('user_id', userId)
     .single()
 
-  if (!tokenRow?.kep_encrypted || !tokenRow?.kep_password_encrypted) {
+  const hasKep = !!(tokenRow?.kep_encrypted && tokenRow?.kep_password_encrypted)
+  const hasUuid = !!tokenRow?.token_encrypted
+
+  if (!hasKep && !hasUuid) {
     return { reports: [], total: 0, noKep: true, isMock: true }
   }
 
-  try {
-    const kepDecrypted = decrypt(tokenRow.kep_encrypted)
-    const password = decrypt(tokenRow.kep_password_encrypted)
-    const taxId = (tokenRow.kep_tax_id ?? '').trim()
+  // ── Try KEP OAuth first ────────────────────────────────────────────────────
+  if (hasKep) {
+    try {
+      const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
+      const password = decrypt(tokenRow!.kep_password_encrypted)
+      const taxId = (tokenRow!.kep_tax_id ?? '').trim()
 
-    const { accessToken } = await loginWithKep(kepDecrypted, password, taxId)
+      const { accessToken } = await loginWithKep(kepDecrypted, password, taxId)
 
-    const res = await fetch(
-      `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
-        signal: AbortSignal.timeout(15000),
-        cache: 'no-store',
+      const res = await fetch(
+        `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+          signal: AbortSignal.timeout(15000),
+          cache: 'no-store',
+        }
+      )
+
+      if (res.ok) {
+        const raw = await res.json()
+        return { ...normalizeReports(raw), noKep: false, isMock: false }
       }
-    )
-
-    if (res.ok) {
-      const raw = await res.json()
-      const normalized = normalizeReports(raw)
-      return { ...normalized, noKep: false, isMock: false }
+    } catch {
+      // fall through to UUID token fallback
     }
-    const errText = await res.text().catch(() => '')
-    return { reports: [], total: 0, noKep: false, isMock: true, debugError: `regdoc ${res.status}: ${errText.slice(0, 300)}` }
-  } catch (e) {
-    return { reports: [], total: 0, noKep: false, isMock: true, debugError: String(e).slice(0, 300) }
   }
+
+  // ── Fallback: UUID Bearer token via ws/a ───────────────────────────────────
+  if (hasUuid) {
+    try {
+      const token = decrypt(tokenRow!.token_encrypted).trim()
+      const res = await fetch(
+        `${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`,
+        {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+          signal: AbortSignal.timeout(15000),
+          cache: 'no-store',
+        }
+      )
+      if (res.ok) {
+        const raw = await res.json()
+        return { ...normalizeReports(raw), noKep: false, isMock: false }
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  return { reports: [], total: 0, noKep: false, isMock: true, debugError: hasKep ? 'KEP OAuth failed; UUID token also failed or absent.' : 'UUID token failed.' }
 }
 
 function statusBadge(status: TaxReport['status'], text: string) {

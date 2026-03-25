@@ -12,7 +12,9 @@ import { decrypt } from '@/lib/crypto'
 import { signWithKepDecrypted, inspectKep } from '@/lib/dps/signer'
 
 const DPS_BASE  = 'https://cabinet.tax.gov.ua/ws/public_api'
+const DPS_API   = 'https://cabinet.tax.gov.ua/ws/api'
 const OAUTH_URL = 'https://cabinet.tax.gov.ua/ws/auth/oauth/token'
+const CABINET   = 'https://cabinet.tax.gov.ua'
 
 async function probe(url: string, authHeader: string, label: string) {
   try {
@@ -107,13 +109,59 @@ export async function GET(request: NextRequest) {
   const username = `${taxId}-${taxId}-${Date.now()}`
   const sigOfUsername = await signWithKepDecrypted(kepDecrypted, kepPassword, username)
 
-  // ── Standard probes ───────────────────────────────────────────────────────
-  const [ppCard, splatp, zvit, corr] = await Promise.all([
-    probe(`${DPS_BASE}/payer_card`, kepAuth, 'KEP → payer_card'),
-    probe(`${DPS_BASE}/ta/splatp?year=${year}`, kepAuth, `KEP → ta/splatp`),
-    probe(`${DPS_BASE}/zvit/zvit_list?year=${year}`, kepAuth, `KEP → zvit_list`),
-    probe(`${DPS_BASE}/corr/correspondence?page=0&limit=20`, kepAuth, 'KEP → corr'),
+  // ── Standard probes (public_api with KEP Bearer) ──────────────────────────
+  const standardResults = await Promise.all([
+    probe(`${DPS_BASE}/payer_card`, kepAuth, 'public_api → payer_card'),
+    probe(`${DPS_BASE}/ta/splatp?year=${year}`, kepAuth, `public_api → ta/splatp`),
+    probe(`${DPS_BASE}/zvit/zvit_list?year=${year}`, kepAuth, `public_api → zvit/zvit_list`),
+    probe(`${DPS_BASE}/zvit/list?year=${year}`, kepAuth, `public_api → zvit/list`),
+    probe(`${DPS_BASE}/regdoc/list?periodYear=${year}&page=0&size=20`, kepAuth, `public_api → regdoc/list`),
+    probe(`${DPS_BASE}/corr/correspondence?page=0&limit=20`, kepAuth, 'public_api → corr/correspondence'),
+    probe(`${DPS_BASE}/corr/list?page=0&size=20`, kepAuth, 'public_api → corr/list'),
+    probe(`${DPS_BASE}/ta/debt`, kepAuth, 'public_api → ta/debt'),
+    // ws/api/* with KEP Bearer (not OAuth) — expected 401/403, see exact error
+    probe(`${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=5`, kepAuth, 'ws/api → regdoc/list (KEP bearer)'),
+    probe(`${DPS_API}/corr/correspondence?page=0&size=5`, kepAuth, 'ws/api → corr (KEP bearer)'),
   ])
+
+  // ── Try OAuth with cabinet cookies ────────────────────────────────────────
+  let cookieOAuth = { label: 'OAuth cookie', status: 0, ok: false, preview: '' }
+  try {
+    // Step 1: GET cabinet to obtain session cookies
+    const getRes = await fetch(`${CABINET}/`, {
+      headers: { ...BROWSER_HEADERS },
+      signal: AbortSignal.timeout(10000),
+      cache: 'no-store',
+      redirect: 'follow',
+    })
+    const setCookies = getRes.headers.getSetCookie?.() ?? []
+    const cookieStr = setCookies.map((c: string) => c.split(';')[0]).join('; ')
+
+    // Step 2: POST OAuth with those cookies
+    const sha1 = (s: string) => createHash('sha1').update(s).digest('hex').toUpperCase()
+    const basic = (u: string, p: string) => 'Basic ' + Buffer.from(`${u}:${p}`).toString('base64')
+    const oauthRes = await fetch(OAUTH_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...BROWSER_HEADERS,
+        Authorization: basic(sha1(taxId), sha1(taxId)),
+        ...(cookieStr ? { Cookie: cookieStr } : {}),
+      },
+      body: `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`,
+      signal: AbortSignal.timeout(20000),
+      cache: 'no-store',
+    })
+    const text = await oauthRes.text().catch(() => '')
+    cookieOAuth = {
+      label: `OAuth SHA1 Basic + cookies (${setCookies.length} cookies from GET /)`,
+      status: oauthRes.status,
+      ok: oauthRes.ok,
+      preview: text.slice(0, 400),
+    }
+  } catch (e) {
+    cookieOAuth = { label: 'OAuth cookie attempt', status: 0, ok: false, preview: String(e) }
+  }
 
   // ── OAuth login variants (parallel) ───────────────────────────────────────
   const sha1 = (s: string) => createHash('sha1').update(s).digest('hex').toUpperCase()
@@ -152,12 +200,22 @@ export async function GET(request: NextRequest) {
 
     // V8: basic taxId:taxId, NO browser headers (baseline)
     tryOAuth('V8: basic taxId:taxId, no browser headers', body1, { Authorization: basic(taxId, taxId) }, false),
+
+    // V9: basic SHA1 lowercase, sign taxId
+    tryOAuth('V9: basic SHA1-lowercase + browser, sign taxId', body1,
+      { Authorization: basic(sha1(taxId).toLowerCase(), sha1(taxId).toLowerCase()) }, true),
+
+    // V10: client_id=cabinet in body + basic SHA1, sign taxId
+    tryOAuth('V10: client_id=cabinet in body + basic SHA1, sign taxId',
+      `grant_type=password&client_id=${encodeURIComponent(sha1(taxId))}&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`,
+      { Authorization: basic(sha1(taxId), sha1(taxId)) }, true),
   ])
 
   return NextResponse.json({
     taxId,
     kepInfo,
-    standardProbes: [ppCard, splatp, zvit, corr].map(r => ({ label: r.label, status: r.status, preview: r.preview })),
+    standardProbes: standardResults.map(r => ({ label: r.label, status: r.status, preview: r.preview })),
+    cookieOAuth: { label: cookieOAuth.label, status: cookieOAuth.status, preview: cookieOAuth.preview },
     oauthVariants: oauthResults.map(r => ({ label: r.label, status: r.status, preview: r.preview })),
   })
 }

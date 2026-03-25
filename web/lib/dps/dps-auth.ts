@@ -17,6 +17,7 @@
  * (doubled, uppercase, colon-separated). This is how the DPS Angular cabinet
  * authenticates the OAuth client — not a standard client_id/secret.
  */
+import { createHash } from 'crypto'
 import { signWithKepDecrypted } from './signer'
 
 const DPS_OAUTH_URL = 'https://cabinet.tax.gov.ua/ws/auth/oauth/token'
@@ -26,10 +27,12 @@ export interface DpsSession {
   expiresIn: number // seconds (typically 600)
 }
 
-/** Build the Authorization: Basic header required by DPS OAuth */
+/** Build the Authorization: Basic header required by DPS OAuth.
+ *  DPS uses SHA1(taxId).toUpperCase() as the OAuth client_id and client_secret
+ *  (both identical, colon-separated), matching the DPS Angular cabinet behaviour. */
 function buildBasicAuth(taxId: string): string {
-  // DPS OAuth client auth: taxId doubled, colon-separated
-  return 'Basic ' + Buffer.from(`${taxId}:${taxId}`).toString('base64')
+  const sha1 = createHash('sha1').update(taxId).digest('hex').toUpperCase()
+  return 'Basic ' + Buffer.from(`${sha1}:${sha1}`).toString('base64')
 }
 
 /**

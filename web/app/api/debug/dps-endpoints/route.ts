@@ -6,13 +6,13 @@
  * REMOVE THIS ROUTE BEFORE PRODUCTION LAUNCH.
  */
 import { NextRequest, NextResponse } from 'next/server'
+import { createHash } from 'crypto'
 import { createClient } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto'
-import { signWithKepDecrypted } from '@/lib/dps/signer'
+import { signWithKepDecrypted, inspectKep } from '@/lib/dps/signer'
 
-const DPS_BASE = 'https://cabinet.tax.gov.ua/ws/public_api'
-const DPS_A    = 'https://cabinet.tax.gov.ua/ws/a'
-const DPS_API  = 'https://cabinet.tax.gov.ua/ws/api'
+const DPS_BASE  = 'https://cabinet.tax.gov.ua/ws/public_api'
+const OAUTH_URL = 'https://cabinet.tax.gov.ua/ws/auth/oauth/token'
 
 async function probe(url: string, authHeader: string, label: string) {
   try {
@@ -22,10 +22,25 @@ async function probe(url: string, authHeader: string, label: string) {
       cache: 'no-store',
     })
     const text = await res.text().catch(() => '')
-    const preview = text.slice(0, 300)
-    return { label, url, status: res.status, ok: res.ok, preview }
+    return { label, status: res.status, ok: res.ok, preview: text.slice(0, 300) }
   } catch (e) {
-    return { label, url, status: 0, ok: false, preview: String(e) }
+    return { label, status: 0, ok: false, preview: String(e) }
+  }
+}
+
+async function tryOAuth(label: string, body: string, headers: Record<string, string> = {}) {
+  try {
+    const res = await fetch(OAUTH_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
+      body,
+      signal: AbortSignal.timeout(20000),
+      cache: 'no-store',
+    })
+    const text = await res.text().catch(() => '')
+    return { label, status: res.status, ok: res.ok, preview: text.slice(0, 400) }
+  } catch (e) {
+    return { label, status: 0, ok: false, preview: String(e) }
   }
 }
 
@@ -49,70 +64,89 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'No KEP configured for this client' }, { status: 404 })
   }
 
-  // Build KEP auth header
   const kepDecrypted = decrypt(tokenRow.kep_encrypted)
-  const password = decrypt(tokenRow.kep_password_encrypted)
+  const kepPassword = decrypt(tokenRow.kep_password_encrypted)
   const taxId = (tokenRow.kep_tax_id ?? '').trim()
-  const kepAuth = await signWithKepDecrypted(kepDecrypted, password, taxId)
 
-  // UUID token (if available)
-  let uuidToken: string | null = null
-  if (tokenRow.token_encrypted) {
-    try { uuidToken = decrypt(tokenRow.token_encrypted).trim() } catch { /* ignore */ }
-  }
+  // ── KEP cert info ──────────────────────────────────────────────────────────
+  let kepInfo: Record<string, string> = {}
+  try {
+    const pfxBuf = Buffer.from(kepDecrypted.startsWith('{')
+      ? JSON.parse(kepDecrypted).files[0].base64
+      : kepDecrypted, 'base64')
+    const info = await inspectKep(pfxBuf, kepPassword)
+    kepInfo = {
+      ownerName: info.ownerName,
+      taxIdInCert: info.taxId,
+      validFrom: info.validFrom,
+      validTo: info.validTo,
+      caName: info.caName,
+    }
+  } catch (e) { kepInfo = { error: String(e) } }
 
   const year = new Date().getFullYear()
 
-  // Standard endpoint probes (parallel)
-  const results = await Promise.all([
-    probe(`${DPS_BASE}/payer_card`, kepAuth, 'KEP → public_api/payer_card'),
-    probe(`${DPS_BASE}/ta/splatp?year=${year}`, kepAuth, `KEP → public_api/ta/splatp?year=${year}`),
-    probe(`${DPS_BASE}/zvit/zvit_list?year=${year}`, kepAuth, `KEP → zvit/zvit_list?year=${year}`),
-    probe(`${DPS_BASE}/corr/correspondence?page=0&limit=20`, kepAuth, 'KEP → public_api/corr/correspondence'),
+  // ── Sign taxId (for public_api Bearer) ────────────────────────────────────
+  const kepAuth = await signWithKepDecrypted(kepDecrypted, kepPassword, taxId)
+  const sigOfTaxId = kepAuth.startsWith('Bearer ') ? kepAuth.slice(7) : kepAuth
+
+  // ── Sign username (for OAuth password) ────────────────────────────────────
+  const username = `${taxId}-${taxId}-${Date.now()}`
+  const sigOfUsername = await signWithKepDecrypted(kepDecrypted, kepPassword, username)
+
+  // ── Standard probes ───────────────────────────────────────────────────────
+  const [ppCard, splatp, zvit, corr] = await Promise.all([
+    probe(`${DPS_BASE}/payer_card`, kepAuth, 'KEP → payer_card'),
+    probe(`${DPS_BASE}/ta/splatp?year=${year}`, kepAuth, `KEP → ta/splatp`),
+    probe(`${DPS_BASE}/zvit/zvit_list?year=${year}`, kepAuth, `KEP → zvit_list`),
+    probe(`${DPS_BASE}/corr/correspondence?page=0&limit=20`, kepAuth, 'KEP → corr'),
   ])
 
-  // KEP OAuth login → get session token → test private API
-  const signature = kepAuth.startsWith('Bearer ') ? kepAuth.slice(7) : kepAuth
-  const username = `${taxId}-${taxId}-${Date.now()}`
-  let loginResult: { label: string; url: string; status: number; ok: boolean; preview: string }
-  let loginToken: string | null = null
-  try {
-    const loginRes = await fetch('https://cabinet.tax.gov.ua/ws/auth/oauth/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`,
-      signal: AbortSignal.timeout(20000),
-      cache: 'no-store',
-    })
-    const loginText = await loginRes.text()
-    loginResult = { label: `KEP LOGIN (${loginRes.status})`, url: 'ws/auth/oauth/token', status: loginRes.status, ok: loginRes.ok, preview: loginText.slice(0, 300) }
-    if (loginRes.ok) {
-      const tokens = JSON.parse(loginText)
-      loginToken = tokens.access_token ?? null
-    }
-  } catch (e) {
-    loginResult = { label: 'KEP LOGIN → error', url: 'ws/auth/oauth/token', status: 0, ok: false, preview: String(e) }
-  }
+  // ── OAuth login variants (parallel) ───────────────────────────────────────
+  const sha1 = (s: string) => createHash('sha1').update(s).digest('hex').toUpperCase()
+  const basic = (u: string, p: string) => 'Basic ' + Buffer.from(`${u}:${p}`).toString('base64')
 
-  const loginProbes = loginToken ? await Promise.all([
-    probe(`${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${loginToken}`, `SESSION → regdoc/list`),
-    probe(`${DPS_API}/corr/correspondence?page=0&size=20`, `Bearer ${loginToken}`, 'SESSION → corr/correspondence'),
-    probe(`${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${loginToken}`, `SESSION → ws/a/regdoc/list`).then(
-      () => probe(`${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${loginToken!}`, `SESSION/a → regdoc/list`)
-    ),
-  ]) : []
+  const oauthResults = await Promise.all([
+    // V1: no auth header, sign taxId
+    tryOAuth('OAuth v1: no auth, sign taxId',
+      `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`),
 
-  const allResults = [...results, loginResult, ...loginProbes]
+    // V2: Basic taxId:taxId, sign taxId
+    tryOAuth('OAuth v2: basic taxId:taxId, sign taxId',
+      `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`,
+      { Authorization: basic(taxId, taxId) }),
+
+    // V3: Basic SHA1:SHA1, sign taxId
+    tryOAuth('OAuth v3: basic SHA1:SHA1, sign taxId',
+      `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`,
+      { Authorization: basic(sha1(taxId), sha1(taxId)) }),
+
+    // V4: client_id=cabinet in body, sign taxId
+    tryOAuth('OAuth v4: client_id=cabinet, sign taxId',
+      `grant_type=password&client_id=cabinet&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`),
+
+    // V5: client_id=ecp in body, sign taxId
+    tryOAuth('OAuth v5: client_id=ecp, sign taxId',
+      `grant_type=password&client_id=ecp&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`),
+
+    // V6: Basic taxId:taxId, sign username
+    tryOAuth('OAuth v6: basic taxId:taxId, sign username',
+      `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfUsername)}`,
+      { Authorization: basic(taxId, taxId) }),
+
+    // V7: no auth header, sign username
+    tryOAuth('OAuth v7: no auth, sign username',
+      `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfUsername)}`),
+
+    // V8: client_id=cabinet, sign username
+    tryOAuth('OAuth v8: client_id=cabinet, sign username',
+      `grant_type=password&client_id=cabinet&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfUsername)}`),
+  ])
 
   return NextResponse.json({
     taxId,
-    hasUuidToken: !!uuidToken,
-    results: allResults.map(r => ({
-      label: r.label,
-      status: r.status,
-      ok: r.ok,
-      preview: r.preview,
-    })),
+    kepInfo,
+    standardProbes: [ppCard, splatp, zvit, corr].map(r => ({ label: r.label, status: r.status, preview: r.preview })),
+    oauthVariants: oauthResults.map(r => ({ label: r.label, status: r.status, preview: r.preview })),
   })
 }
-// force redeploy Wed Mar 25 15:01:44     2026

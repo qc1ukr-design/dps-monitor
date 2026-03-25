@@ -28,11 +28,24 @@ async function probe(url: string, authHeader: string, label: string) {
   }
 }
 
-async function tryOAuth(label: string, body: string, headers: Record<string, string> = {}) {
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  'Origin': 'https://cabinet.tax.gov.ua',
+  'Referer': 'https://cabinet.tax.gov.ua/',
+  'Accept': 'application/json, text/plain, */*',
+  'Accept-Language': 'uk-UA,uk;q=0.9',
+  'X-Requested-With': 'XMLHttpRequest',
+}
+
+async function tryOAuth(label: string, body: string, extraHeaders: Record<string, string> = {}, browserLike = false) {
   try {
     const res = await fetch(OAUTH_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...(browserLike ? BROWSER_HEADERS : {}),
+        ...extraHeaders,
+      },
       body,
       signal: AbortSignal.timeout(20000),
       cache: 'no-store',
@@ -106,41 +119,39 @@ export async function GET(request: NextRequest) {
   const sha1 = (s: string) => createHash('sha1').update(s).digest('hex').toUpperCase()
   const basic = (u: string, p: string) => 'Basic ' + Buffer.from(`${u}:${p}`).toString('base64')
 
+  const body1 = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`
+  const body2 = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfUsername)}`
+
   const oauthResults = await Promise.all([
-    // V1: no auth header, sign taxId
-    tryOAuth('OAuth v1: no auth, sign taxId',
-      `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`),
+    // V1: basic taxId:taxId, sign taxId, browser headers
+    tryOAuth('V1: basic taxId:taxId + browser headers, sign taxId', body1, { Authorization: basic(taxId, taxId) }, true),
 
-    // V2: Basic taxId:taxId, sign taxId
-    tryOAuth('OAuth v2: basic taxId:taxId, sign taxId',
-      `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`,
-      { Authorization: basic(taxId, taxId) }),
+    // V2: basic SHA1:SHA1, sign taxId, browser headers
+    tryOAuth('V2: basic SHA1:SHA1 + browser headers, sign taxId', body1, { Authorization: basic(sha1(taxId), sha1(taxId)) }, true),
 
-    // V3: Basic SHA1:SHA1, sign taxId
-    tryOAuth('OAuth v3: basic SHA1:SHA1, sign taxId',
-      `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`,
-      { Authorization: basic(sha1(taxId), sha1(taxId)) }),
+    // V3: no auth, sign taxId, browser headers
+    tryOAuth('V3: no auth + browser headers, sign taxId', body1, {}, true),
 
-    // V4: client_id=cabinet in body, sign taxId
-    tryOAuth('OAuth v4: client_id=cabinet, sign taxId',
-      `grant_type=password&client_id=cabinet&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`),
+    // V4: client_id=cabinet, sign taxId, browser headers
+    tryOAuth('V4: client_id=cabinet + browser headers, sign taxId',
+      `grant_type=password&client_id=cabinet&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`,
+      {}, true),
 
-    // V5: client_id=ecp in body, sign taxId
-    tryOAuth('OAuth v5: client_id=ecp, sign taxId',
-      `grant_type=password&client_id=ecp&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`),
+    // V5: client_id=ecp, sign taxId, browser headers
+    tryOAuth('V5: client_id=ecp + browser headers, sign taxId',
+      `grant_type=password&client_id=ecp&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfTaxId)}`,
+      {}, true),
 
-    // V6: Basic taxId:taxId, sign username
-    tryOAuth('OAuth v6: basic taxId:taxId, sign username',
-      `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfUsername)}`,
-      { Authorization: basic(taxId, taxId) }),
+    // V6: basic taxId:taxId, sign username, browser headers
+    tryOAuth('V6: basic taxId:taxId + browser headers, sign username', body2, { Authorization: basic(taxId, taxId) }, true),
 
-    // V7: no auth header, sign username
-    tryOAuth('OAuth v7: no auth, sign username',
-      `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfUsername)}`),
+    // V7: no auth, browser headers, password=Bearer+sig (try with Bearer prefix)
+    tryOAuth('V7: no auth + browser, password=Bearer sig',
+      `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent('Bearer ' + sigOfTaxId)}`,
+      {}, true),
 
-    // V8: client_id=cabinet, sign username
-    tryOAuth('OAuth v8: client_id=cabinet, sign username',
-      `grant_type=password&client_id=cabinet&username=${encodeURIComponent(username)}&password=${encodeURIComponent(sigOfUsername)}`),
+    // V8: basic taxId:taxId, NO browser headers (baseline)
+    tryOAuth('V8: basic taxId:taxId, no browser headers', body1, { Authorization: basic(taxId, taxId) }, false),
   ])
 
   return NextResponse.json({

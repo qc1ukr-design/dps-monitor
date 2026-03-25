@@ -13,6 +13,7 @@ import { signWithKepDecrypted, inspectKep } from '@/lib/dps/signer'
 
 const DPS_BASE  = 'https://cabinet.tax.gov.ua/ws/public_api'
 const DPS_API   = 'https://cabinet.tax.gov.ua/ws/api'
+const DPS_A     = 'https://cabinet.tax.gov.ua/ws/a'
 const OAUTH_URL = 'https://cabinet.tax.gov.ua/ws/auth/oauth/token'
 const CABINET   = 'https://cabinet.tax.gov.ua'
 
@@ -83,6 +84,9 @@ export async function GET(request: NextRequest) {
   const kepPassword = decrypt(tokenRow.kep_password_encrypted)
   const taxId = (tokenRow.kep_tax_id ?? '').trim()
 
+  // UUID token (may be null if not configured)
+  const uuidToken = tokenRow.token_encrypted ? decrypt(tokenRow.token_encrypted).trim() : null
+
   // ── KEP cert info ──────────────────────────────────────────────────────────
   let kepInfo: Record<string, string> = {}
   try {
@@ -123,6 +127,14 @@ export async function GET(request: NextRequest) {
     probe(`${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=5`, kepAuth, 'ws/api → regdoc/list (KEP bearer)'),
     probe(`${DPS_API}/corr/correspondence?page=0&size=5`, kepAuth, 'ws/api → corr (KEP bearer)'),
   ])
+
+  // ── ws/a/* probes with UUID Bearer token (old approach) ───────────────────
+  const wsaResults = uuidToken ? await Promise.all([
+    probe(`${DPS_A}/payer/payer_card`, `Bearer ${uuidToken}`, 'ws/a → payer_card (UUID)'),
+    probe(`${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=10`, `Bearer ${uuidToken}`, 'ws/a → regdoc/list (UUID)'),
+    probe(`${DPS_A}/corr/correspondence?page=0&size=10`, `Bearer ${uuidToken}`, 'ws/a → corr (UUID)'),
+    probe(`${DPS_A}/ta/splatp/sti?year=${year}`, `Bearer ${uuidToken}`, 'ws/a → ta/splatp (UUID)'),
+  ]) : [{ label: 'ws/a (UUID)', status: 0, ok: false, preview: 'No UUID token configured' }]
 
   // ── Try OAuth with cabinet cookies ────────────────────────────────────────
   let cookieOAuth = { label: 'OAuth cookie', status: 0, ok: false, preview: '' }
@@ -214,7 +226,9 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     taxId,
     kepInfo,
+    hasUuidToken: !!uuidToken,
     standardProbes: standardResults.map(r => ({ label: r.label, status: r.status, preview: r.preview })),
+    wsaProbes: wsaResults.map(r => ({ label: r.label, status: r.status, preview: r.preview })),
     cookieOAuth: { label: cookieOAuth.label, status: cookieOAuth.status, preview: cookieOAuth.preview },
     oauthVariants: oauthResults.map(r => ({ label: r.label, status: r.status, preview: r.preview })),
   })

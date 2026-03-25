@@ -96,10 +96,8 @@ export async function GET(request: NextRequest) {
     // Test refresh token endpoint (pass ?refreshToken=xxx to test)
     ...(refreshToken ? await (async () => {
       const refreshUrls = [
+        'https://cabinet.tax.gov.ua/ws/auth/oauth/token',
         `${DPS_API}/oauth/token`,
-        `${DPS_API}/auth/token`,
-        `${DPS_API}/token`,
-        `${DPS_BASE}/oauth/token`,
       ]
       const results = []
       for (const url of refreshUrls) {

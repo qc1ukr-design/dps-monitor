@@ -31,6 +31,7 @@ async function probe(url: string, authHeader: string, label: string) {
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const clientId = searchParams.get('clientId')
+  const refreshToken = searchParams.get('refreshToken')
   if (!clientId) return NextResponse.json({ error: 'clientId required' }, { status: 400 })
 
   const supabase = await createClient()
@@ -89,11 +90,36 @@ export async function GET(request: NextRequest) {
     ...(uuidToken ? [
       // Correct reports endpoint (discovered via browser DevTools)
       probe(`${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${uuidToken}`, `UUID → regdoc/list?periodYear=${year}`),
-      probe(`${DPS_A}/regdoc/list?periodYear=${year - 1}&page=0&size=15&sort=dget,desc`, `Bearer ${uuidToken}`, `UUID → regdoc/list?periodYear=${year - 1}`),
-      // Correspondence
       probe(`${DPS_A}/corr/correspondence?page=0&limit=20`, `Bearer ${uuidToken}`, 'UUID → corr/correspondence'),
-      probe(`${DPS_A}/corr/list?page=0&size=20`, `Bearer ${uuidToken}`, 'UUID → corr/list'),
     ] : []),
+
+    // Test refresh token endpoint (pass ?refreshToken=xxx to test)
+    ...(refreshToken ? await (async () => {
+      try {
+        const r = await fetch(`${DPS_A}/oauth/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `grant_type=refresh_token&refresh_token=${refreshToken}`,
+          signal: AbortSignal.timeout(10000),
+          cache: 'no-store',
+        })
+        const text = await r.text()
+        // If refresh worked, try regdoc/list with new access token
+        let regdocResult = null
+        try {
+          const parsed = JSON.parse(text)
+          if (parsed.access_token) {
+            regdocResult = await probe(`${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=15&sort=dget,desc`, `Bearer ${parsed.access_token}`, `FRESH_TOKEN → regdoc/list`)
+          }
+        } catch { /* ignore */ }
+        return [
+          { label: `REFRESH → oauth/token (status ${r.status})`, url: `${DPS_A}/oauth/token`, status: r.status, ok: r.ok, preview: text.slice(0, 300) },
+          ...(regdocResult ? [regdocResult] : []),
+        ]
+      } catch (e) {
+        return [{ label: 'REFRESH → oauth/token', url: `${DPS_A}/oauth/token`, status: 0, ok: false, preview: String(e) }]
+      }
+    })() : []),
   ])
 
   return NextResponse.json({

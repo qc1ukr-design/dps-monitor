@@ -50,20 +50,25 @@ async function fetchReports(
 
       const kepAuth = await signWithKepDecrypted(kepDecrypted, password, taxId)
 
-      const res = await fetch(
-        `${DPS_BASE}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`,
-        {
+      const endpoints = [
+        `${DPS_BASE}/regdoc/list?periodYear=${year}&page=0&size=50`,
+        `${DPS_BASE}/zvit/zvit_list?year=${year}`,
+        `${DPS_BASE}/zvit/list?year=${year}`,
+      ]
+
+      for (const url of endpoints) {
+        const res = await fetch(url, {
           headers: { Authorization: kepAuth, Accept: 'application/json' },
           signal: AbortSignal.timeout(15000),
           cache: 'no-store',
+        })
+        if (res.ok) {
+          const raw = await res.json()
+          return { ...normalizeReports(raw), noKep: false, isMock: false }
         }
-      )
-
-      if (res.ok) {
-        const raw = await res.json()
-        return { ...normalizeReports(raw), noKep: false, isMock: false }
+        publicApiError += `${url.split('/').slice(-1)[0].split('?')[0]}→${res.status} `
       }
-      publicApiError = `public_api HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 150)}`
+      publicApiError = publicApiError.trim()
     } catch (e) {
       publicApiError = String(e)
     }

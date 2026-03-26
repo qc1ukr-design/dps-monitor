@@ -1,24 +1,32 @@
 /**
  * Lightweight DPS probe — no DB, no KEP, no auth required.
- * Tests session-cookie theory: GET cabinet first, then use cookie in OAuth.
- * DELETE after debugging is done.
+ * Tests challenge endpoint variations — the flow might be:
+ *   1. GET /ws/auth/challenge?username=<taxId> → get nonce/challenge
+ *   2. Sign the challenge with KEP
+ *   3. POST to token endpoint with signed challenge
+ * DELETE after debugging.
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createHash } from 'crypto'
 
-const DPS_OAUTH = 'https://cabinet.tax.gov.ua/ws/auth/oauth/token'
+const DPS_BASE  = 'https://cabinet.tax.gov.ua/ws'
+const DPS_OAUTH = `${DPS_BASE}/auth/oauth/token`
+const DPS_CHALLENGE = `${DPS_BASE}/auth/challenge`
 
 async function probe(
   label: string,
   url: string,
   init: RequestInit,
-): Promise<{ label: string; status: number; body: string }> {
+): Promise<{ label: string; status: number; body: string; headers: Record<string, string> }> {
   try {
     const r = await fetch(url, { ...init, signal: AbortSignal.timeout(12000), cache: 'no-store' })
     const body = await r.text()
-    return { label, status: r.status, body: body.slice(0, 400) }
+    const headers: Record<string, string> = {}
+    // @ts-expect-error - Headers iteration
+    for (const [k, v] of r.headers.entries()) headers[k] = v
+    return { label, status: r.status, body: body.slice(0, 600), headers }
   } catch (e) {
-    return { label, status: 0, body: String(e) }
+    return { label, status: 0, body: String(e), headers: {} }
   }
 }
 
@@ -32,91 +40,61 @@ export async function GET(req: NextRequest) {
   const sha1   = createHash('sha1').update(taxId).digest('hex').toUpperCase()
   const basicTin  = 'Basic ' + Buffer.from(`${taxId}:${taxId}`).toString('base64')
   const basicSha1 = 'Basic ' + Buffer.from(`${sha1}:${sha1}`).toString('base64')
-  const garbage = Buffer.alloc(64).toString('base64')  // 64 zero bytes
+  const garbage = Buffer.alloc(64).toString('base64')
   const username = `${taxId}-${taxId}-${Date.now()}`
   const qs = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(garbage)}`
 
-  const browserUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-
-  // Step 1: GET cabinet to harvest session cookie
-  let sessionCookie = ''
-  let setCookieHeader = ''
-  let cabinetStatus = 0
-  try {
-    const cabRes = await fetch('https://cabinet.tax.gov.ua/', {
-      method: 'GET',
-      headers: {
-        'User-Agent': browserUA,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'uk-UA,uk;q=0.9',
-      },
-      signal: AbortSignal.timeout(10000),
-      cache: 'no-store',
-      redirect: 'follow',
-    })
-    cabinetStatus = cabRes.status
-    const cookies: string[] = []
-    // @ts-expect-error - Headers iteration
-    for (const [k, v] of cabRes.headers.entries()) {
-      if (k.toLowerCase() === 'set-cookie') {
-        setCookieHeader += v + '; '
-        // Extract cookie name=value part (before ;)
-        const nameVal = v.split(';')[0].trim()
-        if (nameVal) cookies.push(nameVal)
-      }
-    }
-    sessionCookie = cookies.join('; ')
-  } catch (e) {
-    setCookieHeader = String(e)
-  }
-
-  const baseHeaders: Record<string, string> = {
-    'User-Agent': browserUA,
+  const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+  const hdr: Record<string, string> = {
+    'User-Agent': ua,
     'Origin': 'https://cabinet.tax.gov.ua',
     'Referer': 'https://cabinet.tax.gov.ua/',
     'Accept': 'application/json, text/plain, */*',
     'Accept-Language': 'uk-UA,uk;q=0.9',
   }
-  const headersWithCookie = sessionCookie
-    ? { ...baseHeaders, 'Cookie': sessionCookie }
-    : baseHeaders
 
   const results = await Promise.all([
-    // 1. No auth, no cookie (baseline)
-    probe('no-auth + no-cookie (→400)', `${DPS_OAUTH}?${qs}`, {
+    // Challenge with plain taxId
+    probe('GET challenge?username=taxId', `${DPS_CHALLENGE}?username=${taxId}`, {
+      method: 'GET', headers: hdr,
+    }),
+    // Challenge with TIN:TIN:timestamp username
+    probe('GET challenge?username=TIN-TIN-TS', `${DPS_CHALLENGE}?username=${encodeURIComponent(username)}`, {
+      method: 'GET', headers: hdr,
+    }),
+    // Challenge POST with plain taxId
+    probe('POST challenge form taxId', DPS_CHALLENGE, {
       method: 'POST',
+      headers: { ...hdr, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `username=${encodeURIComponent(taxId)}`,
     }),
-    // 2. TIN:TIN + no cookie + browser UA
-    probe('TIN:TIN + no-cookie + UA', `${DPS_OAUTH}?${qs}`, {
+    // Challenge POST with TIN-TIN-TS username
+    probe('POST challenge form TIN-TIN-TS', DPS_CHALLENGE, {
       method: 'POST',
-      headers: { ...baseHeaders, 'Authorization': basicTin },
+      headers: { ...hdr, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `username=${encodeURIComponent(username)}`,
     }),
-    // 3. TIN:TIN + session cookie + browser UA
-    probe('TIN:TIN + session-cookie + UA', `${DPS_OAUTH}?${qs}`, {
-      method: 'POST',
-      headers: { ...headersWithCookie, 'Authorization': basicTin },
+    // Token endpoint OPTIONS (CORS preflight)
+    probe('OPTIONS oauth/token', DPS_OAUTH, {
+      method: 'OPTIONS',
+      headers: { ...hdr, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' },
     }),
-    // 4. SHA1 + session cookie (control)
-    probe('SHA1(TIN) + session-cookie + UA', `${DPS_OAUTH}?${qs}`, {
-      method: 'POST',
-      headers: { ...headersWithCookie, 'Authorization': basicSha1 },
+    // Token with TIN:TIN + basicAuth header (control)
+    probe('TIN:TIN POST oauth QS (→500?)', `${DPS_OAUTH}?${qs}`, {
+      method: 'POST', headers: { ...hdr, 'Authorization': basicTin },
     }),
-    // 5. Challenge endpoint GET (does it exist?)
-    probe('GET /ws/auth/challenge', 'https://cabinet.tax.gov.ua/ws/auth/challenge', {
-      method: 'GET',
-      headers: baseHeaders,
+    // Token with SHA1 auth (control)
+    probe('SHA1 POST oauth QS (→500?)', `${DPS_OAUTH}?${qs}`, {
+      method: 'POST', headers: { ...hdr, 'Authorization': basicSha1 },
     }),
-    // 6. Challenge with taxId POST
-    probe('POST /ws/auth/challenge {username:taxId}', 'https://cabinet.tax.gov.ua/ws/auth/challenge', {
-      method: 'POST',
-      headers: { ...baseHeaders, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: username }),
+    // GET token endpoint (no auth)
+    probe('GET oauth/token', DPS_OAUTH, {
+      method: 'GET', headers: hdr,
     }),
+    // Other potential API discovery endpoints
+    probe('GET /ws/auth/', `${DPS_BASE}/auth/`, { method: 'GET', headers: hdr }),
+    probe('GET /ws/.well-known/openid-configuration', 'https://cabinet.tax.gov.ua/.well-known/openid-configuration', { method: 'GET', headers: hdr }),
   ])
 
-  return NextResponse.json({
-    taxId, username,
-    sessionHarvest: { cabinetStatus, setCookieHeader: setCookieHeader.slice(0, 300), sessionCookie: sessionCookie.slice(0, 200) },
-    results,
-  })
+  return NextResponse.json({ taxId, username, sha1prefix: sha1.slice(0, 8), results })
 }

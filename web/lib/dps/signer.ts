@@ -32,34 +32,36 @@ const AdmZip = require('adm-zip') as new (buf: Buffer) => {
 try {
   /* eslint-disable @typescript-eslint/no-require-imports */
   const { createHash } = require('crypto') as typeof import('crypto')
-  const rfc3280 = require('jkurwa/lib/spec/rfc3280') as { ALGORITHMS_IDS: Record<string, string>; Certificate: { encode: (obj: unknown, enc: string) => Buffer } }
+  const rfc3280 = require('jkurwa/lib/spec/rfc3280') as { Certificate: { encode: (obj: unknown, enc: string) => Buffer } }
   const certidSpec = require('jkurwa/lib/spec/rfc5035-certid') as {
-    SigningCertificateV2: {
-      wrap: (cert: unknown, hash: Buffer) => Buffer
-      encode: (data: unknown, enc: string) => Buffer
-    }
+    SigningCertificateV2: { wrap: (cert: unknown, hash: Buffer) => Buffer }
   }
   /* eslint-enable @typescript-eslint/no-require-imports */
 
-  // SHA-256 OID in space-separated format (asn1.js internal representation)
-  // Must use raw OID string — name lookup ('id-sha256') only works for decode direction
-  const SHA256_OID = '2 16 840 1 101 3 4 2 1'
-
-  // Replace GOST-34311 cert hash with SHA-256 in signingCertificateV2
+  // Replace GOST-34311 cert hash with SHA-256 in signingCertificateV2.
+  // Build the ASN.1 DER manually to avoid asn1.js OID registry issues:
+  //
+  //   SigningCertificateV2 ::= SEQUENCE {
+  //     certs SEQUENCE OF ESSCertIDv2
+  //   }
+  //   ESSCertIDv2 ::= SEQUENCE {
+  //     hashAlgorithm AlgorithmIdentifier DEFAULT { algorithm id-sha256 }, ← omitted = defaults to SHA-256
+  //     certHash OCTET STRING
+  //   }
+  //
+  // RFC 5035: omitting hashAlgorithm means SHA-256 is assumed — Spring BouncyCastle handles this correctly.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   certidSpec.SigningCertificateV2.wrap = function(cert: unknown, _hash: Buffer): Buffer {
-    const c = cert as { tbsCertificate: { issuer: unknown; serialNumber: unknown } }
     const certDer = rfc3280.Certificate.encode(cert, 'der')
     const sha256Hash = createHash('sha256').update(certDer).digest()
-    const idv2 = {
-      hashAlgorithm: { algorithm: SHA256_OID },  // raw OID string, not name alias
-      certHash: sha256Hash,
-      issuerSerial: {
-        issuer: [{ type: 'directoryName', value: c.tbsCertificate.issuer }],
-        serialNumber: c.tbsCertificate.serialNumber,
-      },
-    }
-    return certidSpec.SigningCertificateV2.encode({ certs: [idv2] }, 'der')
+    //  04 20 <32 bytes>          → OCTET STRING (certHash)
+    //  30 22 <above>             → ESSCertIDv2 SEQUENCE
+    //  30 24 <above>             → certs SEQUENCE OF
+    //  30 26 <above>             → SigningCertificateV2 SEQUENCE
+    const certHashDer = Buffer.concat([Buffer.from([0x04, 0x20]), sha256Hash])
+    const essCertIdDer = Buffer.concat([Buffer.from([0x30, certHashDer.length]), certHashDer])
+    const certsDer = Buffer.concat([Buffer.from([0x30, essCertIdDer.length]), essCertIdDer])
+    return Buffer.concat([Buffer.from([0x30, certsDer.length]), certsDer])
   }
   console.log('[signer] signingCertificateV2 SHA-256 patch applied')
 } catch (e) {

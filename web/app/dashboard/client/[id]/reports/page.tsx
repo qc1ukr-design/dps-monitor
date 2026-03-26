@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
 import { signWithKepDecrypted } from '@/lib/dps/signer'
+import { loginWithKep } from '@/lib/dps/dps-auth'
 import { normalizeReports } from '@/lib/dps/normalizer'
 import type { ReportsList, TaxReport } from '@/lib/dps/types'
 
@@ -50,7 +51,8 @@ async function fetchReports(
       const taxId        = (tokenRow!.kep_tax_id ?? '').trim()
       const kepAuth      = await signWithKepDecrypted(kepDecrypted, kepPass, taxId)
 
-      const attempts = [
+      // Try direct KEP Bearer on ws/api and ws/a
+      const bearerAttempts = [
         { url: url1, auth: kepAuth,             label: 'ws/api-raw' },
         { url: url1, auth: `Bearer ${kepAuth}`, label: 'ws/api-bearer' },
         { url: url2, auth: kepAuth,             label: 'ws/a-raw' },
@@ -58,7 +60,7 @@ async function fetchReports(
       ]
 
       const results: string[] = []
-      for (const { url, auth, label } of attempts) {
+      for (const { url, auth, label } of bearerAttempts) {
         try {
           const res = await fetch(url, {
             headers: { Authorization: auth, ...opts },
@@ -74,6 +76,24 @@ async function fetchReports(
           results.push(`${label}→err`)
         }
       }
+
+      // Try OAuth with sign(taxId) — same content as ws/public_api Bearer that works
+      try {
+        const { accessToken } = await loginWithKep(kepDecrypted, kepPass, taxId)
+        const res = await fetch(url1, {
+          headers: { Authorization: `Bearer ${accessToken}`, ...opts },
+          signal: AbortSignal.timeout(12000),
+          cache: 'no-store',
+        })
+        if (res.ok) {
+          const raw = await res.json()
+          return { ...normalizeReports(raw), hasToken: true, isMock: false, tokenExpired: false }
+        }
+        results.push(`oauth→${res.status}`)
+      } catch (e) {
+        results.push(`oauth→${String(e).slice(0, 60)}`)
+      }
+
       kepDebug = results.join(' ')
     } catch (e) {
       kepDebug = `KEP:${String(e).slice(0, 80)}`

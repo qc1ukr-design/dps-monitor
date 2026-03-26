@@ -4,20 +4,19 @@
  * Flow:
  *   1. Sign taxId string with KEP → CAdES-BES base64 signature
  *   2. POST to ws/auth/oauth/token with grant_type=password
- *      Authorization: Basic base64("{SHA1(taxId).toUpperCase()}:{SHA1(taxId).toUpperCase()}")
+ *      Authorization: Basic base64("{taxId}:{taxId}")   ← plain TIN, NOT hash
  *      username = {taxId}-{taxId}-{Date.now()}
- *      password = {base64 signature}
+ *      password = base64(CAdES-BES signed taxId)
  *   3. Get access_token (lives 600s / 10 min)
  *
  * access_token is then used as Bearer for ws/api/* endpoints:
  *   - ws/api/regdoc/list          → reports
  *   - ws/api/corr/correspondence  → incoming documents
  *
- * The Basic auth header uses the taxId SHA1 as "client credentials"
- * (doubled, uppercase, colon-separated). This is how the DPS Angular cabinet
- * authenticates the OAuth client — not a standard client_id/secret.
+ * Source: https://github.com/NadozirnySvyatoslav/l10n_ua (Python reference impl)
+ *         https://dou.ua/forums/topic/34457/
+ * The Basic auth header encodes TIN:TIN (not SHA1).
  */
-import { createHash } from 'crypto'
 import { signWithKepDecrypted } from './signer'
 
 const DPS_OAUTH_URL = 'https://cabinet.tax.gov.ua/ws/auth/oauth/token'
@@ -28,11 +27,10 @@ export interface DpsSession {
 }
 
 /** Build the Authorization: Basic header required by DPS OAuth.
- *  DPS uses SHA1(taxId).toUpperCase() as the OAuth client_id and client_secret
- *  (both identical, colon-separated), matching the DPS Angular cabinet behaviour. */
+ *  DPS uses the raw taxpayer TIN as both client_id and client_secret
+ *  (TIN:TIN, base64-encoded). Confirmed from Python reference implementation. */
 function buildBasicAuth(taxId: string): string {
-  const sha1 = createHash('sha1').update(taxId).digest('hex').toUpperCase()
-  return 'Basic ' + Buffer.from(`${sha1}:${sha1}`).toString('base64')
+  return 'Basic ' + Buffer.from(`${taxId}:${taxId}`).toString('base64')
 }
 
 /**
@@ -47,24 +45,30 @@ export async function loginWithKep(
   password: string,
   taxId: string
 ): Promise<DpsSession> {
+  // Username format: taxId-taxId-timestamp (milliseconds)
+  // Confirmed from DOU forum + Python reference implementation
   const username = `${taxId}-${taxId}-${Date.now()}`
-  // Sign just taxId — same content as ws/public_api Bearer auth that works
+  // Sign the plain taxId (not the username)
   const signature = await signWithKepDecrypted(kepDecrypted, password, taxId)
 
-  const res = await fetch(DPS_OAUTH_URL, {
+  // DPS Cabinet OAuth: params go in the query string (not POST body)
+  const qs = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`
+  const url = `${DPS_OAUTH_URL}?${qs}`
+  console.log('[dps-auth] POST', DPS_OAUTH_URL, '| username:', username, '| taxId:', taxId, '| sigLen:', signature.length)
+
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
       'Authorization': buildBasicAuth(taxId),
     },
-    body: `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`,
     signal: AbortSignal.timeout(25000),
     cache: 'no-store',
   })
 
   if (!res.ok) {
     const preview = await res.text().catch(() => '')
-    throw new Error(`DPS OAuth ${res.status}: ${preview.slice(0, 200)}`)
+    console.error('[dps-auth] OAuth error', res.status, preview)
+    throw new Error(`DPS OAuth ${res.status} [taxId=${taxId} sigLen=${signature.length}]: ${preview.slice(0, 400)}`)
   }
 
   const data = await res.json() as { access_token: string; expires_in?: number }

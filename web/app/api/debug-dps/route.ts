@@ -1,32 +1,27 @@
 /**
  * Lightweight DPS probe — no DB, no KEP, no auth required.
- * Tests challenge endpoint variations — the flow might be:
- *   1. GET /ws/auth/challenge?username=<taxId> → get nonce/challenge
- *   2. Sign the challenge with KEP
- *   3. POST to token endpoint with signed challenge
- * DELETE after debugging.
+ * Tests the FIXED static DPS OAuth client_id found in the Angular bundle.
+ * DELETE after debugging is done.
  */
 import { NextRequest, NextResponse } from 'next/server'
-import { createHash } from 'crypto'
 
-const DPS_BASE  = 'https://cabinet.tax.gov.ua/ws'
-const DPS_OAUTH = `${DPS_BASE}/auth/oauth/token`
-const DPS_CHALLENGE = `${DPS_BASE}/auth/challenge`
+const DPS_OAUTH = 'https://cabinet.tax.gov.ua/ws/auth/oauth/token'
+
+// Fixed static client credential from cabinet Angular bundle (ne.oauth.clientBase64)
+// Decoded: AE6867664C096C83E0530101007F45F4:AE6867664C096C83E0530101007F45F4
+const DPS_CLIENT_BASIC = 'QUU2ODY3NjY0QzA5NkM4M0UwNTMwMTAxMDA3RjQ1RjQ6QUU2ODY3NjY0QzA5NkM4M0UwNTMwMTAxMDA3RjQ1RjQ='
 
 async function probe(
   label: string,
   url: string,
   init: RequestInit,
-): Promise<{ label: string; status: number; body: string; headers: Record<string, string> }> {
+): Promise<{ label: string; status: number; body: string }> {
   try {
     const r = await fetch(url, { ...init, signal: AbortSignal.timeout(12000), cache: 'no-store' })
     const body = await r.text()
-    const headers: Record<string, string> = {}
-    // @ts-expect-error - Headers iteration
-    for (const [k, v] of r.headers.entries()) headers[k] = v
-    return { label, status: r.status, body: body.slice(0, 600), headers }
+    return { label, status: r.status, body: body.slice(0, 600) }
   } catch (e) {
-    return { label, status: 0, body: String(e), headers: {} }
+    return { label, status: 0, body: String(e) }
   }
 }
 
@@ -37,64 +32,51 @@ export async function GET(req: NextRequest) {
   }
 
   const taxId = req.nextUrl.searchParams.get('taxId') ?? '2858814822'
-  const sha1   = createHash('sha1').update(taxId).digest('hex').toUpperCase()
-  const basicTin  = 'Basic ' + Buffer.from(`${taxId}:${taxId}`).toString('base64')
-  const basicSha1 = 'Basic ' + Buffer.from(`${sha1}:${sha1}`).toString('base64')
-  const garbage = Buffer.alloc(64).toString('base64')
+  const garbage = Buffer.alloc(64).toString('base64')  // 64 zero bytes (not real signature)
   const username = `${taxId}-${taxId}-${Date.now()}`
   const qs = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(garbage)}`
 
-  const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-  const hdr: Record<string, string> = {
-    'User-Agent': ua,
-    'Origin': 'https://cabinet.tax.gov.ua',
-    'Referer': 'https://cabinet.tax.gov.ua/',
-    'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'uk-UA,uk;q=0.9',
-  }
-
   const results = await Promise.all([
-    // Challenge with plain taxId
-    probe('GET challenge?username=taxId', `${DPS_CHALLENGE}?username=${taxId}`, {
-      method: 'GET', headers: hdr,
-    }),
-    // Challenge with TIN:TIN:timestamp username
-    probe('GET challenge?username=TIN-TIN-TS', `${DPS_CHALLENGE}?username=${encodeURIComponent(username)}`, {
-      method: 'GET', headers: hdr,
-    }),
-    // Challenge POST with plain taxId
-    probe('POST challenge form taxId', DPS_CHALLENGE, {
+    // 1. Baseline: no auth (→400 expected)
+    probe('no-auth (baseline→400)', `${DPS_OAUTH}?${qs}`, { method: 'POST' }),
+
+    // 2. CORRECT fixed client_id + garbage sig
+    //    Expected: NOT 500 — should get signature error like
+    //    {"error":"Помилка","error_description":"Помилка перевірки підпису:хибний підпис"}
+    probe('FIXED client_id + garbage sig', `${DPS_OAUTH}?${qs}`, {
       method: 'POST',
-      headers: { ...hdr, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `username=${encodeURIComponent(taxId)}`,
+      headers: { 'Authorization': `Basic ${DPS_CLIENT_BASIC}` },
     }),
-    // Challenge POST with TIN-TIN-TS username
-    probe('POST challenge form TIN-TIN-TS', DPS_CHALLENGE, {
+
+    // 3. CORRECT fixed client_id + garbage sig in body (alternative)
+    probe('FIXED client_id + garbage sig body', DPS_OAUTH, {
       method: 'POST',
-      headers: { ...hdr, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `username=${encodeURIComponent(username)}`,
+      headers: {
+        'Authorization': `Basic ${DPS_CLIENT_BASIC}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: qs,
     }),
-    // Token endpoint OPTIONS (CORS preflight)
-    probe('OPTIONS oauth/token', DPS_OAUTH, {
-      method: 'OPTIONS',
-      headers: { ...hdr, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' },
+
+    // 4. Wrong fake taxId with fixed client_id
+    probe('FIXED client_id + fake taxId garbage sig', `${DPS_OAUTH}?grant_type=password&username=1234567890-1234567890-${Date.now()}&password=${encodeURIComponent(garbage)}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${DPS_CLIENT_BASIC}` },
     }),
-    // Token with TIN:TIN + basicAuth header (control)
-    probe('TIN:TIN POST oauth QS (→500?)', `${DPS_OAUTH}?${qs}`, {
-      method: 'POST', headers: { ...hdr, 'Authorization': basicTin },
+
+    // 5. Old SHA1 format (control — should still 500)
+    probe('SHA1(TIN) auth (old broken→500)', `${DPS_OAUTH}?${qs}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Basic N0Q5MkNERTVFMjg3QjdDMjY5MTdCQTMyRDUzMjg2MjcxRDc5RDlFODo3RDkyQ0RFNUUyODdCN0MyNjkxN0JBMzJENTMyODYyNzFENzlEOUU4'
+        // = Basic base64(SHA1(2858814822):SHA1(2858814822)) — our old wrong format
+      },
     }),
-    // Token with SHA1 auth (control)
-    probe('SHA1 POST oauth QS (→500?)', `${DPS_OAUTH}?${qs}`, {
-      method: 'POST', headers: { ...hdr, 'Authorization': basicSha1 },
-    }),
-    // GET token endpoint (no auth)
-    probe('GET oauth/token', DPS_OAUTH, {
-      method: 'GET', headers: hdr,
-    }),
-    // Other potential API discovery endpoints
-    probe('GET /ws/auth/', `${DPS_BASE}/auth/`, { method: 'GET', headers: hdr }),
-    probe('GET /ws/.well-known/openid-configuration', 'https://cabinet.tax.gov.ua/.well-known/openid-configuration', { method: 'GET', headers: hdr }),
   ])
 
-  return NextResponse.json({ taxId, username, sha1prefix: sha1.slice(0, 8), results })
+  return NextResponse.json({
+    taxId, username,
+    clientBase64: DPS_CLIENT_BASIC.slice(0, 20) + '...',
+    results,
+  })
 }

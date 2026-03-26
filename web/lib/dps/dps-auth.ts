@@ -4,33 +4,34 @@
  * Flow:
  *   1. Sign taxId string with KEP → CAdES-BES base64 signature
  *   2. POST to ws/auth/oauth/token with grant_type=password
- *      Authorization: Basic base64("{taxId}:{taxId}")   ← plain TIN, NOT hash
+ *      Authorization: Basic <clientBase64>   ← FIXED static client credential
  *      username = {taxId}-{taxId}-{Date.now()}
  *      password = base64(CAdES-BES signed taxId)
  *   3. Get access_token (lives 600s / 10 min)
  *
- * access_token is then used as Bearer for ws/api/* endpoints:
- *   - ws/api/regdoc/list          → reports
- *   - ws/api/corr/correspondence  → incoming documents
+ * access_token is then used as Bearer for ws/api/* endpoints.
  *
- * Source: https://github.com/NadozirnySvyatoslav/l10n_ua (Python reference impl)
- *         https://dou.ua/forums/topic/34457/
- * The Basic auth header encodes TIN:TIN (not SHA1).
+ * Source: cabinet.tax.gov.ua Angular bundle (chunk-Z2AFO2O6.js), field:
+ *   ne.oauth.clientBase64 = "QUU2ODY3NjY0QzA5NkM4M0UwNTMwMTAxMDA3RjQ1RjQ6..."
+ * Decoded: AE6867664C096C83E0530101007F45F4:AE6867664C096C83E0530101007F45F4
+ * This is a FIXED static OAuth2 client_id registered in the DPS system.
+ * ALL taxpayers share the same client credential; the per-user identity
+ * is established via the KEP signature in the password field.
  */
 import { signWithKepDecrypted } from './signer'
 
 const DPS_OAUTH_URL = 'https://cabinet.tax.gov.ua/ws/auth/oauth/token'
 
+/**
+ * Fixed static OAuth2 client_id:client_secret for DPS Cabinet.
+ * Found in the Angular cabinet environment config (ne.oauth.clientBase64).
+ * This NEVER changes — it identifies the DPS Cabinet application, not the user.
+ */
+const DPS_CLIENT_BASIC = 'QUU2ODY3NjY0QzA5NkM4M0UwNTMwMTAxMDA3RjQ1RjQ6QUU2ODY3NjY0QzA5NkM4M0UwNTMwMTAxMDA3RjQ1RjQ='
+
 export interface DpsSession {
   accessToken: string
   expiresIn: number // seconds (typically 600)
-}
-
-/** Build the Authorization: Basic header required by DPS OAuth.
- *  DPS uses the raw taxpayer TIN as both client_id and client_secret
- *  (TIN:TIN, base64-encoded). Confirmed from Python reference implementation. */
-function buildBasicAuth(taxId: string): string {
-  return 'Basic ' + Buffer.from(`${taxId}:${taxId}`).toString('base64')
 }
 
 /**
@@ -46,20 +47,19 @@ export async function loginWithKep(
   taxId: string
 ): Promise<DpsSession> {
   // Username format: taxId-taxId-timestamp (milliseconds)
-  // Confirmed from DOU forum + Python reference implementation
   const username = `${taxId}-${taxId}-${Date.now()}`
-  // Sign the plain taxId (not the username)
+  // Sign the plain taxId string (not the username)
   const signature = await signWithKepDecrypted(kepDecrypted, password, taxId)
 
-  // DPS Cabinet OAuth: params go in the query string (not POST body)
+  // Params go in query string — Spring Security reads them from QS + body
   const qs = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`
   const url = `${DPS_OAUTH_URL}?${qs}`
-  console.log('[dps-auth] POST', DPS_OAUTH_URL, '| username:', username, '| taxId:', taxId, '| sigLen:', signature.length)
+  console.log('[dps-auth] POST', DPS_OAUTH_URL, '| taxId:', taxId, '| username:', username, '| sigLen:', signature.length)
 
   const res = await fetch(url, {
     method: 'POST',
     headers: {
-      'Authorization': buildBasicAuth(taxId),
+      'Authorization': `Basic ${DPS_CLIENT_BASIC}`,
     },
     signal: AbortSignal.timeout(25000),
     cache: 'no-store',

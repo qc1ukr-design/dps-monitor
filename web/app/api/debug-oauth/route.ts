@@ -7,7 +7,7 @@
  *   /api/debug-oauth?secret=SECRET&clientId=UUID
  */
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
 import { decrypt } from '@/lib/crypto'
 import { signWithKepDecrypted } from '@/lib/dps/signer'
 
@@ -59,23 +59,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'clientId required' }, { status: 400 })
   }
 
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'not authenticated — open this URL in browser while logged in' }, { status: 401 })
-  }
+  // Service client — bypasses RLS; endpoint protected by CRON_SECRET
+  const supabase = createServiceClient()
 
   const { data: tokenRow, error: dbErr } = await supabase
     .from('api_tokens')
     .select('kep_encrypted, kep_password_encrypted, kep_tax_id')
     .eq('client_id', clientId)
-    .eq('user_id', user.id)
     .single()
 
   if (dbErr || !tokenRow?.kep_encrypted) {
     return NextResponse.json({
       error: 'no KEP found',
-      userId: user.id,
       clientId,
       dbError: dbErr?.message,
       rowFound: !!tokenRow,

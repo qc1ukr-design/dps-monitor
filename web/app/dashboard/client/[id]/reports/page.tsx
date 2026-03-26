@@ -14,20 +14,6 @@ interface PageProps {
 const DPS_API  = 'https://cabinet.tax.gov.ua/ws/api'
 const DPS_A    = 'https://cabinet.tax.gov.ua/ws/a'
 
-async function probe(url: string, auth: string): Promise<{ ok: boolean; status: number; body: string }> {
-  try {
-    const res = await fetch(url, {
-      headers: { Authorization: auth, Accept: 'application/json' },
-      signal: AbortSignal.timeout(12000),
-      cache: 'no-store',
-    })
-    const body = (await res.text().catch(() => '')).slice(0, 120)
-    return { ok: res.ok, status: res.status, body }
-  } catch (e) {
-    return { ok: false, status: 0, body: String(e).slice(0, 80) }
-  }
-}
-
 async function fetchReports(
   clientId: string,
   userId: string,
@@ -51,6 +37,10 @@ async function fetchReports(
 
   const url1 = `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`
   const url2 = `${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`
+  const opts  = { Accept: 'application/json' }
+
+  let kepDebug  = ''
+  let uuidDebug = ''
 
   // ── Try KEP Bearer directly on ws/api and ws/a (no OAuth) ─────────────────
   if (hasKep) {
@@ -61,24 +51,32 @@ async function fetchReports(
       const kepAuth      = await signWithKepDecrypted(kepDecrypted, kepPass, taxId)
 
       const attempts = [
-        { url: url1, auth: kepAuth,            label: 'ws/api raw' },
-        { url: url1, auth: `Bearer ${kepAuth}`, label: 'ws/api bearer' },
-        { url: url2, auth: kepAuth,            label: 'ws/a raw' },
-        { url: url2, auth: `Bearer ${kepAuth}`, label: 'ws/a bearer' },
+        { url: url1, auth: kepAuth,             label: 'ws/api-raw' },
+        { url: url1, auth: `Bearer ${kepAuth}`, label: 'ws/api-bearer' },
+        { url: url2, auth: kepAuth,             label: 'ws/a-raw' },
+        { url: url2, auth: `Bearer ${kepAuth}`, label: 'ws/a-bearer' },
       ]
 
       const results: string[] = []
       for (const { url, auth, label } of attempts) {
-        const r = await probe(url, auth)
-        if (r.ok) {
-          const raw = JSON.parse(r.body.length < 120 ? r.body : (await fetch(url, { headers: { Authorization: auth, Accept: 'application/json' }, cache: 'no-store' }).then(x => x.text())))
-          return { ...normalizeReports(raw), hasToken: true, isMock: false, tokenExpired: false }
+        try {
+          const res = await fetch(url, {
+            headers: { Authorization: auth, ...opts },
+            signal: AbortSignal.timeout(12000),
+            cache: 'no-store',
+          })
+          if (res.ok) {
+            const raw = await res.json()
+            return { ...normalizeReports(raw), hasToken: true, isMock: false, tokenExpired: false }
+          }
+          results.push(`${label}→${res.status}`)
+        } catch {
+          results.push(`${label}→err`)
         }
-        results.push(`${label}→${r.status}`)
       }
-      var kepDebug = results.join(' ')
+      kepDebug = results.join(' ')
     } catch (e) {
-      var kepDebug = `KEP sign error: ${String(e).slice(0, 100)}`
+      kepDebug = `KEP:${String(e).slice(0, 80)}`
     }
   }
 
@@ -87,7 +85,7 @@ async function fetchReports(
     try {
       const token = decrypt(tokenRow!.token_encrypted).trim()
       const res = await fetch(url2, {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        headers: { Authorization: `Bearer ${token}`, ...opts },
         signal: AbortSignal.timeout(15000),
         cache: 'no-store',
       })
@@ -95,9 +93,9 @@ async function fetchReports(
         const raw = await res.json()
         return { ...normalizeReports(raw), hasToken: true, isMock: false, tokenExpired: false }
       }
-      var uuidDebug = `UUID→${res.status}`
+      uuidDebug = `UUID→${res.status}`
     } catch (e) {
-      var uuidDebug = `UUID err: ${String(e).slice(0, 80)}`
+      uuidDebug = `UUID:${String(e).slice(0, 80)}`
     }
   }
 

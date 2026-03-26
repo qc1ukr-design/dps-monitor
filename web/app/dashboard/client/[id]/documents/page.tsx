@@ -2,8 +2,6 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
-import { loginWithKep } from '@/lib/dps/dps-auth'
-import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeDocuments } from '@/lib/dps/normalizer'
 import type { DocumentsList, IncomingDocument } from '@/lib/dps/types'
 
@@ -11,124 +9,43 @@ interface PageProps {
   params: Promise<{ id: string }>
 }
 
-const DPS_BASE = 'https://cabinet.tax.gov.ua/ws/public_api'
-const DPS_API  = 'https://cabinet.tax.gov.ua/ws/api'
-const DPS_A    = 'https://cabinet.tax.gov.ua/ws/a'
+const DPS_A = 'https://cabinet.tax.gov.ua/ws/a'
 
 async function fetchDocuments(
   clientId: string,
   userId: string
-): Promise<DocumentsList & { noKep: boolean; isMock: boolean; debugMsg?: string }> {
+): Promise<DocumentsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean }> {
   const supabase = await createClient()
 
   const { data: tokenRow } = await supabase
     .from('api_tokens')
-    .select('kep_encrypted, kep_password_encrypted, kep_tax_id, token_encrypted')
+    .select('token_encrypted')
     .eq('client_id', clientId)
     .eq('user_id', userId)
     .single()
 
-  const hasKep = !!(tokenRow?.kep_encrypted && tokenRow?.kep_password_encrypted)
-  const hasUuid = !!tokenRow?.token_encrypted
-
-  if (!hasKep && !hasUuid) {
-    return { documents: [], total: 0, noKep: true, isMock: true }
+  if (!tokenRow?.token_encrypted) {
+    return { documents: [], total: 0, hasToken: false, isMock: true, tokenExpired: false }
   }
 
-  let publicApiError = ''
-  let kepError = ''
-  let uuidError = ''
-
-  // ── Try ws/public_api with KEP Bearer (same auth as sync) ─────────────────
-  if (hasKep) {
-    try {
-      const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
-      const password = decrypt(tokenRow!.kep_password_encrypted)
-      const taxId = (tokenRow!.kep_tax_id ?? '').trim()
-
-      const kepAuth = await signWithKepDecrypted(kepDecrypted, password, taxId)
-
-      const endpoints = [
-        `${DPS_BASE}/corr/correspondence?page=0&size=50`,
-        `${DPS_BASE}/corr/correspondence?page=0&limit=50`,
-        `${DPS_BASE}/corr/list?page=0&size=50`,
-      ]
-
-      for (const url of endpoints) {
-        const res = await fetch(url, {
-          headers: { Authorization: kepAuth, Accept: 'application/json' },
-          signal: AbortSignal.timeout(15000),
-          cache: 'no-store',
-        })
-        if (res.ok) {
-          const raw = await res.json()
-          return { ...normalizeDocuments(raw), noKep: false, isMock: false }
-        }
-        const body = (await res.text().catch(() => '')).slice(0, 100)
-        publicApiError += `${url.split('/').slice(-1)[0].split('?')[0]}→${res.status}(${body}) `
+  try {
+    const token = decrypt(tokenRow.token_encrypted).trim()
+    const res = await fetch(
+      `${DPS_A}/corr/correspondence?page=0&size=50`,
+      {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(15000),
+        cache: 'no-store',
       }
-      publicApiError = publicApiError.trim()
-    } catch (e) {
-      publicApiError = String(e)
+    )
+    if (res.ok) {
+      const raw = await res.json()
+      return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
     }
+    return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: true }
+  } catch {
+    return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: false }
   }
-
-  // ── Try KEP OAuth → ws/api ─────────────────────────────────────────────────
-  if (hasKep) {
-    try {
-      const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
-      const password = decrypt(tokenRow!.kep_password_encrypted)
-      const taxId = (tokenRow!.kep_tax_id ?? '').trim()
-
-      const { accessToken } = await loginWithKep(kepDecrypted, password, taxId)
-
-      const res = await fetch(
-        `${DPS_API}/corr/correspondence?page=0&size=50`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
-          signal: AbortSignal.timeout(15000),
-          cache: 'no-store',
-        }
-      )
-
-      if (res.ok) {
-        const raw = await res.json()
-        return { ...normalizeDocuments(raw), noKep: false, isMock: false }
-      }
-      kepError = `OAuth OK but ws/api HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`
-    } catch (e) {
-      kepError = String(e)
-    }
-  }
-
-  // ── Fallback: UUID Bearer token via ws/a ───────────────────────────────────
-  if (hasUuid) {
-    try {
-      const token = decrypt(tokenRow!.token_encrypted).trim()
-      const res = await fetch(
-        `${DPS_A}/corr/correspondence?page=0&size=50`,
-        {
-          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-          signal: AbortSignal.timeout(15000),
-          cache: 'no-store',
-        }
-      )
-      if (res.ok) {
-        const raw = await res.json()
-        return { ...normalizeDocuments(raw), noKep: false, isMock: false }
-      }
-      uuidError = `UUID HTTP ${res.status}`
-    } catch (e) {
-      uuidError = String(e)
-    }
-  }
-
-  const debugMsg = [
-    publicApiError && `public_api: ${publicApiError}`,
-    kepError && `OAuth: ${kepError}`,
-    uuidError && `UUID: ${uuidError}`,
-  ].filter(Boolean).join(' | ') || 'No tokens'
-  return { documents: [], total: 0, noKep: false, isMock: true, debugMsg }
 }
 
 function statusBadge(status: IncomingDocument['status']) {
@@ -175,7 +92,7 @@ export default async function DocumentsPage({ params }: PageProps) {
 
   if (error || !client) notFound()
 
-  const { documents, total, noKep, isMock, debugMsg } = await fetchDocuments(id, user.id)
+  const { documents, total, hasToken, isMock, tokenExpired } = await fetchDocuments(id, user.id)
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">
@@ -191,58 +108,70 @@ export default async function DocumentsPage({ params }: PageProps) {
               {client.name}{client.edrpou ? ` · ЄДРПОУ: ${client.edrpou}` : ''}
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            {!isMock && (
-              <span className="text-sm text-gray-500">
-                Всього: {total}
-              </span>
-            )}
-          </div>
+          {!isMock && (
+            <span className="text-sm text-gray-500">Всього: {total}</span>
+          )}
         </div>
       </div>
 
-      {/* No KEP notice */}
-      {noKep && (
+      {/* No token */}
+      {!hasToken && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 text-sm text-amber-800">
-          <p className="font-semibold mb-1">🔑 КЕП не налаштовано</p>
+          <p className="font-semibold mb-1">Потрібен токен доступу ДПС</p>
           <p>
-            Для перегляду вхідних документів потрібен електронний підпис (КЕП). Додайте його у{' '}
+            Для перегляду документів додайте токен сесії у{' '}
             <Link href={`/dashboard/client/${id}/settings`} className="underline font-medium hover:text-amber-900">
               Налаштуваннях
             </Link>
-            {' '}або відкрийте документи напряму в{' '}
+            {' '}або відкрийте кабінет ДПС напряму:{' '}
             <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
               className="underline font-medium hover:text-amber-900">
-              Електронному кабінеті ДПС →
+              cabinet.tax.gov.ua →
             </a>
           </p>
         </div>
       )}
 
-      {/* Has KEP but fetch failed */}
-      {!noKep && isMock && (
+      {/* Token expired */}
+      {hasToken && isMock && tokenExpired && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 text-sm text-amber-800">
+          <p className="font-semibold mb-1">Токен доступу застарів</p>
+          <p>
+            Токен ДПС дійсний лише кілька годин. Оновіть його у{' '}
+            <Link href={`/dashboard/client/${id}/settings`} className="underline font-medium hover:text-amber-900">
+              Налаштуваннях
+            </Link>
+            {' '}або відкрийте кабінет ДПС напряму:{' '}
+            <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
+              className="underline font-medium hover:text-amber-900">
+              cabinet.tax.gov.ua →
+            </a>
+          </p>
+        </div>
+      )}
+
+      {/* Generic fetch error */}
+      {hasToken && isMock && !tokenExpired && (
         <div className="bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-sm text-gray-700">
           <p className="font-semibold mb-1">⚠️ Не вдалося завантажити документи</p>
           <p>
-            ДПС кабінет тимчасово недоступний або КЕП застарів. Спробуйте пізніше або{' '}
+            Спробуйте пізніше або відкрийте кабінет ДПС напряму:{' '}
             <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
               className="underline font-medium hover:text-gray-900">
-              відкрийте кабінет ДПС напряму →
+              cabinet.tax.gov.ua →
             </a>
           </p>
-          {debugMsg && (
-            <p className="mt-2 font-mono text-xs text-red-600 break-all">{debugMsg}</p>
-          )}
         </div>
       )}
 
-      {/* Documents table — only show real data */}
+      {/* Empty state */}
       {!isMock && documents.length === 0 && (
         <div className="bg-white rounded-xl border border-gray-200 px-6 py-12 text-center">
           <p className="text-gray-500 text-sm">Вхідних документів не знайдено</p>
         </div>
       )}
 
+      {/* Documents table */}
       {!isMock && documents.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <table className="w-full text-sm">

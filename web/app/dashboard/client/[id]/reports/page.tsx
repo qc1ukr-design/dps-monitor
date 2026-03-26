@@ -2,7 +2,6 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
-import { loginWithKep } from '@/lib/dps/dps-auth'
 import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeReports } from '@/lib/dps/normalizer'
 import type { ReportsList, TaxReport } from '@/lib/dps/types'
@@ -12,15 +11,28 @@ interface PageProps {
   searchParams: Promise<{ year?: string }>
 }
 
-const DPS_BASE = 'https://cabinet.tax.gov.ua/ws/public_api'
 const DPS_API  = 'https://cabinet.tax.gov.ua/ws/api'
 const DPS_A    = 'https://cabinet.tax.gov.ua/ws/a'
+
+async function probe(url: string, auth: string): Promise<{ ok: boolean; status: number; body: string }> {
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: auth, Accept: 'application/json' },
+      signal: AbortSignal.timeout(12000),
+      cache: 'no-store',
+    })
+    const body = (await res.text().catch(() => '')).slice(0, 120)
+    return { ok: res.ok, status: res.status, body }
+  } catch (e) {
+    return { ok: false, status: 0, body: String(e).slice(0, 80) }
+  }
+}
 
 async function fetchReports(
   clientId: string,
   userId: string,
   year: number
-): Promise<ReportsList & { noKep: boolean; isMock: boolean; debugError?: string }> {
+): Promise<ReportsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean; debugError?: string }> {
   const supabase = await createClient()
 
   const { data: tokenRow } = await supabase
@@ -30,108 +42,67 @@ async function fetchReports(
     .eq('user_id', userId)
     .single()
 
-  const hasKep = !!(tokenRow?.kep_encrypted && tokenRow?.kep_password_encrypted)
+  const hasKep  = !!(tokenRow?.kep_encrypted && tokenRow?.kep_password_encrypted)
   const hasUuid = !!tokenRow?.token_encrypted
 
   if (!hasKep && !hasUuid) {
-    return { reports: [], total: 0, noKep: true, isMock: true }
+    return { reports: [], total: 0, hasToken: false, isMock: true, tokenExpired: false }
   }
 
-  let publicApiError = ''
-  let kepError = ''
-  let uuidError = ''
+  const url1 = `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`
+  const url2 = `${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`
 
-  // ── Try ws/public_api with KEP Bearer (same auth as sync) ─────────────────
+  // ── Try KEP Bearer directly on ws/api and ws/a (no OAuth) ─────────────────
   if (hasKep) {
     try {
       const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
-      const password = decrypt(tokenRow!.kep_password_encrypted)
-      const taxId = (tokenRow!.kep_tax_id ?? '').trim()
+      const kepPass      = decrypt(tokenRow!.kep_password_encrypted)
+      const taxId        = (tokenRow!.kep_tax_id ?? '').trim()
+      const kepAuth      = await signWithKepDecrypted(kepDecrypted, kepPass, taxId)
 
-      const kepAuth = await signWithKepDecrypted(kepDecrypted, password, taxId)
-
-      const endpoints = [
-        `${DPS_BASE}/regdoc/list?periodYear=${year}&page=0&size=50`,
-        `${DPS_BASE}/regdoc/list?year=${year}&page=0&size=50`,
-        `${DPS_BASE}/zvit/zvit_list?year=${year}`,
-        `${DPS_BASE}/zvit/list?year=${year}`,
+      const attempts = [
+        { url: url1, auth: kepAuth,            label: 'ws/api raw' },
+        { url: url1, auth: `Bearer ${kepAuth}`, label: 'ws/api bearer' },
+        { url: url2, auth: kepAuth,            label: 'ws/a raw' },
+        { url: url2, auth: `Bearer ${kepAuth}`, label: 'ws/a bearer' },
       ]
 
-      for (const url of endpoints) {
-        const res = await fetch(url, {
-          headers: { Authorization: kepAuth, Accept: 'application/json' },
-          signal: AbortSignal.timeout(15000),
-          cache: 'no-store',
-        })
-        if (res.ok) {
-          const raw = await res.json()
-          return { ...normalizeReports(raw), noKep: false, isMock: false }
+      const results: string[] = []
+      for (const { url, auth, label } of attempts) {
+        const r = await probe(url, auth)
+        if (r.ok) {
+          const raw = JSON.parse(r.body.length < 120 ? r.body : (await fetch(url, { headers: { Authorization: auth, Accept: 'application/json' }, cache: 'no-store' }).then(x => x.text())))
+          return { ...normalizeReports(raw), hasToken: true, isMock: false, tokenExpired: false }
         }
-        const body = (await res.text().catch(() => '')).slice(0, 100)
-        publicApiError += `${url.split('/').slice(-1)[0].split('?')[0]}→${res.status}(${body}) `
+        results.push(`${label}→${r.status}`)
       }
-      publicApiError = publicApiError.trim()
+      var kepDebug = results.join(' ')
     } catch (e) {
-      publicApiError = String(e)
+      var kepDebug = `KEP sign error: ${String(e).slice(0, 100)}`
     }
   }
 
-  // ── Try KEP OAuth → ws/api ─────────────────────────────────────────────────
-  if (hasKep) {
-    try {
-      const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
-      const password = decrypt(tokenRow!.kep_password_encrypted)
-      const taxId = (tokenRow!.kep_tax_id ?? '').trim()
-
-      const { accessToken } = await loginWithKep(kepDecrypted, password, taxId)
-
-      const res = await fetch(
-        `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
-          signal: AbortSignal.timeout(15000),
-          cache: 'no-store',
-        }
-      )
-
-      if (res.ok) {
-        const raw = await res.json()
-        return { ...normalizeReports(raw), noKep: false, isMock: false }
-      }
-      kepError = `OAuth OK but ws/api HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`
-    } catch (e) {
-      kepError = String(e)
-    }
-  }
-
-  // ── Fallback: UUID Bearer token via ws/a ───────────────────────────────────
+  // ── Fallback: UUID Bearer token via ws/a ────────────────────────────────────
   if (hasUuid) {
     try {
       const token = decrypt(tokenRow!.token_encrypted).trim()
-      const res = await fetch(
-        `${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`,
-        {
-          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-          signal: AbortSignal.timeout(15000),
-          cache: 'no-store',
-        }
-      )
+      const res = await fetch(url2, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(15000),
+        cache: 'no-store',
+      })
       if (res.ok) {
         const raw = await res.json()
-        return { ...normalizeReports(raw), noKep: false, isMock: false }
+        return { ...normalizeReports(raw), hasToken: true, isMock: false, tokenExpired: false }
       }
-      uuidError = `UUID HTTP ${res.status}`
+      var uuidDebug = `UUID→${res.status}`
     } catch (e) {
-      uuidError = String(e)
+      var uuidDebug = `UUID err: ${String(e).slice(0, 80)}`
     }
   }
 
-  const debugError = [
-    publicApiError && `public_api: ${publicApiError}`,
-    kepError && `OAuth: ${kepError}`,
-    uuidError && `UUID: ${uuidError}`,
-  ].filter(Boolean).join(' | ') || 'No tokens'
-  return { reports: [], total: 0, noKep: false, isMock: true, debugError }
+  const debugError = [kepDebug, uuidDebug].filter(Boolean).join(' | ')
+  return { reports: [], total: 0, hasToken: true, isMock: true, tokenExpired: false, debugError }
 }
 
 function statusBadge(status: TaxReport['status'], text: string) {
@@ -180,7 +151,7 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
     .single()
   if (error || !client) notFound()
 
-  const { reports, total, noKep, isMock, debugError } = await fetchReports(id, user.id, year)
+  const { reports, total, hasToken, isMock, tokenExpired, debugError } = await fetchReports(id, user.id, year)
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">
@@ -221,16 +192,16 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
         </div>
       </div>
 
-      {/* No KEP notice */}
-      {noKep && (
+      {/* No token */}
+      {!hasToken && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 text-sm text-amber-800">
-          <p className="font-semibold mb-1">🔑 КЕП не налаштовано</p>
+          <p className="font-semibold mb-1">Потрібен токен доступу ДПС</p>
           <p>
-            Для перегляду звітності потрібен електронний підпис (КЕП). Додайте його у{' '}
+            Для перегляду звітності додайте токен сесії у{' '}
             <Link href={`/dashboard/client/${id}/settings`} className="underline font-medium hover:text-amber-900">
               Налаштуваннях
             </Link>
-            {' '}або перевірте звітність напряму в{' '}
+            {' '}або перегляньте звітність напряму у{' '}
             <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
               className="underline font-medium hover:text-amber-900">
               Електронному кабінеті ДПС →
@@ -239,15 +210,33 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
         </div>
       )}
 
-      {/* Has KEP but fetch failed */}
-      {!noKep && isMock && (
+      {/* Token expired */}
+      {hasToken && isMock && tokenExpired && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 text-sm text-amber-800">
+          <p className="font-semibold mb-1">Токен доступу застарів</p>
+          <p>
+            Токен ДПС дійсний лише кілька годин. Оновіть його у{' '}
+            <Link href={`/dashboard/client/${id}/settings`} className="underline font-medium hover:text-amber-900">
+              Налаштуваннях
+            </Link>
+            {' '}або відкрийте кабінет ДПС напряму:{' '}
+            <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
+              className="underline font-medium hover:text-amber-900">
+              cabinet.tax.gov.ua →
+            </a>
+          </p>
+        </div>
+      )}
+
+      {/* Generic fetch error (network issue etc) */}
+      {hasToken && isMock && !tokenExpired && (
         <div className="bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-sm text-gray-700">
           <p className="font-semibold mb-1">⚠️ Не вдалося завантажити звітність</p>
           <p>
-            ДПС кабінет тимчасово недоступний або КЕП застарів. Спробуйте пізніше або{' '}
+            Спробуйте пізніше або відкрийте кабінет ДПС напряму:{' '}
             <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
               className="underline font-medium hover:text-gray-900">
-              відкрийте кабінет ДПС напряму →
+              cabinet.tax.gov.ua →
             </a>
           </p>
           {debugError && (
@@ -263,7 +252,7 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
         </div>
       )}
 
-      {/* Reports table — only real data */}
+      {/* Reports table */}
       {!isMock && reports.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <table className="w-full text-sm">

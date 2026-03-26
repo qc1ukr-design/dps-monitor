@@ -304,9 +304,9 @@ export default function ClientSettingsPage() {
       {/* UUID token section */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
         <div>
-          <h2 className="font-semibold text-gray-900">UUID-токен ДПС</h2>
+          <h2 className="font-semibold text-gray-900">Токен сесії ДПС</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            Резервний метод доступу до документів та звітності (якщо КЕП не спрацьовує). Зберігається зашифровано.
+            Потрібен для перегляду звітності та вхідної документації. Дійсний кілька годин після входу в кабінет.
           </p>
         </div>
 
@@ -328,6 +328,18 @@ export default function ClientSettingsPage() {
           </div>
         )}
 
+        {/* How to get the token */}
+        <div className="bg-gray-50 rounded-lg px-4 py-3 text-xs text-gray-600 space-y-1.5">
+          <p className="font-medium text-gray-700">Як отримати токен:</p>
+          <ol className="list-decimal list-inside space-y-1">
+            <li>Відкрийте <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer" className="underline text-blue-600 hover:text-blue-800">cabinet.tax.gov.ua</a> та увійдіть через КЕП</li>
+            <li>Натисніть F12 (DevTools) → вкладка <strong>Network</strong></li>
+            <li>Оновіть сторінку, знайдіть будь-який запит до <code className="bg-gray-200 px-1 rounded">ws/a/</code></li>
+            <li>У заголовках знайдіть <code className="bg-gray-200 px-1 rounded">Authorization: Bearer ...</code></li>
+            <li>Скопіюйте значення після <code className="bg-gray-200 px-1 rounded">Bearer </code> та вставте нижче</li>
+          </ol>
+        </div>
+
         <form onSubmit={handleSaveToken} className="space-y-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -337,12 +349,9 @@ export default function ClientSettingsPage() {
               type="text"
               value={tokenValue}
               onChange={e => setTokenValue(e.target.value)}
-              placeholder="Вставте UUID-токен з кабінету ДПС"
+              placeholder="Вставте Bearer токен з DevTools"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
             />
-            <p className="text-xs text-gray-400 mt-1">
-              Кабінет ДПС → Профіль → Відкриті дані → скопіюйте токен доступу.
-            </p>
           </div>
           {tokenError && (
             <div className="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-lg">{tokenError}</div>

@@ -2,7 +2,6 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
-import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { loginWithKep } from '@/lib/dps/dps-auth'
 import { normalizeReports } from '@/lib/dps/normalizer'
 import type { ReportsList, TaxReport } from '@/lib/dps/types'
@@ -36,67 +35,33 @@ async function fetchReports(
     return { reports: [], total: 0, hasToken: false, isMock: true, tokenExpired: false }
   }
 
-  const url1 = `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`
-  const url2 = `${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`
-  const opts  = { Accept: 'application/json' }
+  const url  = `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`
+  const urlA = `${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=50&sort=dget,desc`
+  const opts = { Accept: 'application/json' }
 
   let kepDebug  = ''
   let uuidDebug = ''
 
-  // ── Try KEP Bearer directly on ws/api and ws/a (no OAuth) ─────────────────
+  // ── KEP: OAuth2 → ws/api ───────────────────────────────────────────────────
   if (hasKep) {
     try {
       const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
       const kepPass      = decrypt(tokenRow!.kep_password_encrypted)
       const taxId        = (tokenRow!.kep_tax_id ?? '').trim()
-      const kepAuth      = await signWithKepDecrypted(kepDecrypted, kepPass, taxId)
 
-      // Try direct KEP Bearer on ws/api and ws/a
-      const bearerAttempts = [
-        { url: url1, auth: kepAuth,             label: 'ws/api-raw' },
-        { url: url1, auth: `Bearer ${kepAuth}`, label: 'ws/api-bearer' },
-        { url: url2, auth: kepAuth,             label: 'ws/a-raw' },
-        { url: url2, auth: `Bearer ${kepAuth}`, label: 'ws/a-bearer' },
-      ]
-
-      const results: string[] = []
-      for (const { url, auth, label } of bearerAttempts) {
-        try {
-          const res = await fetch(url, {
-            headers: { Authorization: auth, ...opts },
-            signal: AbortSignal.timeout(12000),
-            cache: 'no-store',
-          })
-          if (res.ok) {
-            const raw = await res.json()
-            return { ...normalizeReports(raw), hasToken: true, isMock: false, tokenExpired: false }
-          }
-          results.push(`${label}→${res.status}`)
-        } catch {
-          results.push(`${label}→err`)
-        }
+      const { accessToken } = await loginWithKep(kepDecrypted, kepPass, taxId)
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}`, ...opts },
+        signal: AbortSignal.timeout(12000),
+        cache: 'no-store',
+      })
+      if (res.ok) {
+        const raw = await res.json()
+        return { ...normalizeReports(raw), hasToken: true, isMock: false, tokenExpired: false }
       }
-
-      // Try OAuth with sign(taxId) — same content as ws/public_api Bearer that works
-      try {
-        const { accessToken } = await loginWithKep(kepDecrypted, kepPass, taxId)
-        const res = await fetch(url1, {
-          headers: { Authorization: `Bearer ${accessToken}`, ...opts },
-          signal: AbortSignal.timeout(12000),
-          cache: 'no-store',
-        })
-        if (res.ok) {
-          const raw = await res.json()
-          return { ...normalizeReports(raw), hasToken: true, isMock: false, tokenExpired: false }
-        }
-        results.push(`oauth→${res.status}`)
-      } catch (e) {
-        results.push(`oauth→${String(e).slice(0, 60)}`)
-      }
-
-      kepDebug = results.join(' ')
+      kepDebug = `kep-oauth→${res.status}`
     } catch (e) {
-      kepDebug = `KEP:${String(e).slice(0, 80)}`
+      kepDebug = `kep-oauth→${String(e).slice(0, 120)}`
     }
   }
 
@@ -104,7 +69,7 @@ async function fetchReports(
   if (hasUuid) {
     try {
       const token = decrypt(tokenRow!.token_encrypted).trim()
-      const res = await fetch(url2, {
+      const res = await fetch(urlA, {
         headers: { Authorization: `Bearer ${token}`, ...opts },
         signal: AbortSignal.timeout(15000),
         cache: 'no-store',

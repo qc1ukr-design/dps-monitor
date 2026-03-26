@@ -41,11 +41,9 @@ try {
   }
   /* eslint-enable @typescript-eslint/no-require-imports */
 
-  // Register SHA-256 OID so asn1.js can encode it
+  // SHA-256 OID in space-separated format (asn1.js internal representation)
+  // Must use raw OID string — name lookup ('id-sha256') only works for decode direction
   const SHA256_OID = '2 16 840 1 101 3 4 2 1'
-  if (!rfc3280.ALGORITHMS_IDS[SHA256_OID]) {
-    rfc3280.ALGORITHMS_IDS[SHA256_OID] = 'id-sha256'
-  }
 
   // Replace GOST-34311 cert hash with SHA-256 in signingCertificateV2
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -54,7 +52,7 @@ try {
     const certDer = rfc3280.Certificate.encode(cert, 'der')
     const sha256Hash = createHash('sha256').update(certDer).digest()
     const idv2 = {
-      hashAlgorithm: { algorithm: 'id-sha256' },
+      hashAlgorithm: { algorithm: SHA256_OID },  // raw OID string, not name alias
       certHash: sha256Hash,
       issuerSerial: {
         issuer: [{ type: 'directoryName', value: c.tbsCertificate.issuer }],
@@ -63,8 +61,9 @@ try {
     }
     return certidSpec.SigningCertificateV2.encode({ certs: [idv2] }, 'der')
   }
-} catch {
-  // Non-fatal: if patch fails, signing still works (just with GOST cert hash in v2 attr)
+  console.log('[signer] signingCertificateV2 SHA-256 patch applied')
+} catch (e) {
+  console.warn('[signer] signingCertificateV2 patch FAILED:', e)
 }
 
 export interface KepInfo {

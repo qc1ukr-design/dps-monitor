@@ -32,6 +32,10 @@ function str(v: unknown): string {
   return String(v).trim()
 }
 
+function stripHtml(v: unknown): string {
+  return str(v).replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim()
+}
+
 function num(v: unknown): number {
   const n = Number(v)
   return isNaN(n) ? 0 : n
@@ -253,7 +257,7 @@ function _mapDocumentRows(arr: Record<string, unknown>[]): IncomingDocument[] {
     number: str(row.idContent ?? row.codRegdocRef ?? row.num ?? row.docNumber ?? row.number ?? row.DOC_NUMBER ?? row.NUM ?? ''),
     date: str(row.dateIn ?? row.operDate ?? row.dget ?? row.docDate ?? row.date ?? row.DOC_DATE ?? row.DATE ?? ''),
     type: str(row.cdoc ?? row.typeName ?? row.docTypeName ?? row.type ?? row.DOC_TYPE_NAME ?? row.TYPE_NAME ?? ''),
-    subject: str(row.text ?? row.name ?? row.docName ?? row.subject ?? row.DOC_NAME ?? row.TITLE ?? ''),
+    subject: stripHtml(row.text ?? row.name ?? row.docName ?? row.subject ?? row.DOC_NAME ?? row.TITLE ?? ''),
     status: _mapStatusCode(row),
     fromOrg: str(row.csti ?? row.orgName ?? row.fromOrg ?? row.ORG_NAME ?? row.FROM_ORG ?? ''),
     hasAttachments: !!(row.p7s ?? row.hasFiles ?? row.hasAttachments ?? row.HAS_FILES ?? false),

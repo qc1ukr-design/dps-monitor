@@ -2,7 +2,6 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
-import { loginWithKep } from '@/lib/dps/dps-auth'
 import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeDocuments } from '@/lib/dps/normalizer'
 import type { DocumentsList, IncomingDocument } from '@/lib/dps/types'
@@ -12,13 +11,12 @@ interface PageProps {
 }
 
 const DPS_PUBLIC = 'https://cabinet.tax.gov.ua/ws/public_api'
-const DPS_API    = 'https://cabinet.tax.gov.ua/ws/api'
 const DPS_A      = 'https://cabinet.tax.gov.ua/ws/a'
 
 async function fetchDocuments(
   clientId: string,
   userId: string
-): Promise<DocumentsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean; debugError?: string }> {
+): Promise<DocumentsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean }> {
   const supabase = await createClient()
 
   const { data: tokenRow } = await supabase
@@ -37,9 +35,7 @@ async function fetchDocuments(
 
   const opts = { Accept: 'application/json' }
 
-  const dbg: string[] = []
-
-  // ── KEP: ws/public_api (direct KEP Bearer) ────────────────────────────────
+  // ── KEP: ws/public_api/post/incoming (direct KEP Bearer) ──────────────────
   if (hasKep) {
     try {
       const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
@@ -47,68 +43,17 @@ async function fetchDocuments(
       const taxId        = (tokenRow!.kep_tax_id ?? '').trim()
       const kepAuth      = await signWithKepDecrypted(kepDecrypted, kepPass, taxId)
 
-      const publicEndpoints = [
-        `${DPS_PUBLIC}/post/incoming?page=0&size=50`,
-        `${DPS_PUBLIC}/post/inbox?page=0&size=50`,
-        `${DPS_PUBLIC}/corr/incoming?page=0&size=50`,
-      ]
-      for (const ep of publicEndpoints) {
-        const label = ep.replace('https://cabinet.tax.gov.ua', '')
-        try {
-          const res = await fetch(ep, {
-            headers: { Authorization: kepAuth, ...opts },
-            signal: AbortSignal.timeout(10000),
-            cache: 'no-store',
-          })
-          if (res.ok) {
-            const raw = await res.json()
-            // Debug: log first item keys to diagnose field mapping
-            if (raw && typeof raw === 'object') {
-              const r = raw as Record<string, unknown>
-              const arr = Array.isArray(r.content) ? r.content : Array.isArray(r.data) ? r.data : Array.isArray(raw) ? raw : []
-              if (arr.length > 0) {
-                const first = arr[0] as Record<string, unknown>
-                dbg.push(`fields:${Object.keys(first).join(',')}`)
-              }
-            }
-            return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false, debugError: dbg.join(' | ') }
-          }
-          dbg.push(`${label}→${res.status}`)
-        } catch {
-          dbg.push(`${label}→err`)
-        }
+      const res = await fetch(`${DPS_PUBLIC}/post/incoming?page=0&size=50`, {
+        headers: { Authorization: kepAuth, ...opts },
+        signal: AbortSignal.timeout(10000),
+        cache: 'no-store',
+      })
+      if (res.ok) {
+        const raw = await res.json()
+        return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
       }
-
-      // ── KEP: OAuth2 → ws/api ──────────────────────────────────────────────
-      try {
-        const { accessToken } = await loginWithKep(kepDecrypted, kepPass, taxId)
-        dbg.push(`oauth=ok`)
-        const oauthEndpoints = [
-          `${DPS_API}/post/incoming?page=0&size=50`,
-          `${DPS_API}/corr/incoming?page=0&size=50`,
-        ]
-        for (const ep of oauthEndpoints) {
-          const label = ep.replace('https://cabinet.tax.gov.ua', '')
-          try {
-            const res = await fetch(ep, {
-              headers: { Authorization: `Bearer ${accessToken}`, ...opts },
-              signal: AbortSignal.timeout(8000),
-              cache: 'no-store',
-            })
-            if (res.ok) {
-              const raw = await res.json()
-              return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
-            }
-            dbg.push(`${label}→${res.status}`)
-          } catch {
-            dbg.push(`${label}→err`)
-          }
-        }
-      } catch (e) {
-        dbg.push(`oauth→${String(e).slice(0, 60)}`)
-      }
-    } catch (e) {
-      dbg.push(`kep→${String(e).slice(0, 80)}`)
+    } catch {
+      // fall through to UUID fallback
     }
   }
 
@@ -125,13 +70,11 @@ async function fetchDocuments(
         const raw = await res.json()
         return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
       }
-      dbg.push(`uuid-ws/a→${res.status}`)
     } catch {
-      dbg.push(`uuid→err`)
     }
   }
 
-  return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: false, debugError: dbg.join(' | ') }
+  return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: false }
 }
 
 function statusBadge(status: IncomingDocument['status']) {
@@ -178,13 +121,10 @@ export default async function DocumentsPage({ params }: PageProps) {
 
   if (error || !client) notFound()
 
-  const { documents, total, hasToken, isMock, tokenExpired, debugError } = await fetchDocuments(id, user.id)
+  const { documents, total, hasToken, isMock, tokenExpired } = await fetchDocuments(id, user.id)
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">
-      {debugError && (
-        <p className="font-mono text-xs text-red-600 break-all bg-gray-50 p-2 rounded">{debugError}</p>
-      )}
       {/* Header */}
       <div>
         <Link href={`/dashboard/client/${id}`} className="text-sm text-gray-400 hover:text-gray-600">
@@ -250,9 +190,6 @@ export default async function DocumentsPage({ params }: PageProps) {
               cabinet.tax.gov.ua →
             </a>
           </p>
-          {debugError && (
-            <p className="mt-2 font-mono text-xs text-red-600 break-all">{debugError}</p>
-          )}
         </div>
       )}
 

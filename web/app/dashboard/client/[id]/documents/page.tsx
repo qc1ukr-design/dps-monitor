@@ -66,7 +66,7 @@ async function fetchDocuments(
             return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
           }
           dbg.push(`${label}→${res.status}`)
-        } catch (e) {
+        } catch {
           dbg.push(`${label}→err`)
         }
       }

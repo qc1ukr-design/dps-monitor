@@ -49,12 +49,16 @@ async function fetchDocuments(
         signal: AbortSignal.timeout(10000),
         cache: 'no-store',
       })
+      const rawText = await res.text()
+      console.log(`[documents] post/incoming status=${res.status} taxId=${taxId} body=${rawText.slice(0, 400)}`)
       if (res.ok) {
-        const raw = await res.json()
-        return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
+        let rawJson: unknown = null
+        try { rawJson = JSON.parse(rawText) } catch { /* not JSON */ }
+        if (rawJson !== null) return { ...normalizeDocuments(rawJson), hasToken: true, isMock: false, tokenExpired: false }
+        kepDebug = `kep→200 non-JSON: ${rawText.slice(0, 80)}`
+      } else {
+        kepDebug = `kep→${res.status}: ${rawText.slice(0, 80)}`
       }
-      const body = await res.text().catch(() => '')
-      kepDebug = `kep→${res.status}${body ? ': ' + body.slice(0, 100) : ''}`
     } catch (e) {
       kepDebug = `kep→${String(e).slice(0, 100)}`
     }

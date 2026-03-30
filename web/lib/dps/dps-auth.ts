@@ -51,7 +51,7 @@ export async function loginWithKepAsYuo(
   kepDecrypted: string,
   password: string,
   edrpou: string,
-): Promise<DpsSession | null> {
+): Promise<DpsSession | string> {  // returns DpsSession on success, error string on failure
   // Director signs their own РНОКПП (cert's serialNumber)
   const rnokpp = await getCertTaxId(kepDecrypted, password)
 
@@ -62,8 +62,9 @@ export async function loginWithKepAsYuo(
   try {
     signature = await signWithKepDecrypted(kepDecrypted, password, rnokpp)
   } catch (e) {
+    const msg = `sign-failed:${String(e).slice(0, 100)}`
     console.log('[dps-auth] loginWithKepAsYuo sign failed:', e)
-    return null
+    return msg
   }
 
   const qs = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`
@@ -80,11 +81,11 @@ export async function loginWithKepAsYuo(
   if (!res.ok) {
     const preview = await res.text().catch(() => '')
     console.log('[dps-auth] YUO OAuth error', res.status, preview.slice(0, 200))
-    return null
+    return `oauth-${res.status}:${preview.slice(0, 150)}`
   }
 
   const data = await res.json() as { access_token: string; expires_in?: number }
-  if (!data.access_token) return null
+  if (!data.access_token) return 'no-token-in-response'
 
   return {
     accessToken: data.access_token,

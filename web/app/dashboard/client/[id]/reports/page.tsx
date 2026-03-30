@@ -50,20 +50,20 @@ async function fetchReports(
     // 1. For ЮО: OAuth with username={РНОКПП}-{ЄДРПОУ}-{ts}, signs РНОКПП → ЮО context
     if (isYuo) {
       try {
-        const yuoSession = await loginWithKepAsYuo(kepDecrypted, kepPwd, clientEdrpou!)
-        if (yuoSession) {
+        const yuoResult = await loginWithKepAsYuo(kepDecrypted, kepPwd, clientEdrpou!)
+        if (yuoResult && 'accessToken' in yuoResult) {
           const res = await fetch(url, {
-            headers: { Authorization: `Bearer ${yuoSession.accessToken}`, ...opts },
+            headers: { Authorization: `Bearer ${yuoResult.accessToken}`, ...opts },
             signal: AbortSignal.timeout(12000), cache: 'no-store',
           })
           if (res.ok) {
             return { ...normalizeReports(await res.json()), hasToken: true, isMock: false, tokenExpired: false }
           }
-          kepDebug = `yuo-oauth→${res.status}`
+          kepDebug = `yuo-oauth→bearer:${res.status}`
         } else {
-          kepDebug = `yuo-oauth→null`
+          kepDebug = `yuo-oauth→failed:${String(yuoResult).slice(0, 100)}`
         }
-      } catch (e) { kepDebug = `yuo-oauth→${String(e).slice(0, 120)}` }
+      } catch (e) { kepDebug = `yuo-oauth→${String(e).slice(0, 150)}` }
     }
 
     // 2. OAuth Bearer with director РНОКПП (works for ФО; for ЮО returns F-forms only)

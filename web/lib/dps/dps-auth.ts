@@ -18,7 +18,7 @@
  * ALL taxpayers share the same client credential; the per-user identity
  * is established via the KEP signature in the password field.
  */
-import { signWithKepDecrypted, getCertTaxId, signWithStampKey, getStampCertTaxId } from './signer'
+import { signWithKepDecrypted, getCertTaxId } from './signer'
 
 const DPS_OAUTH_URL = 'https://cabinet.tax.gov.ua/ws/auth/oauth/token'
 

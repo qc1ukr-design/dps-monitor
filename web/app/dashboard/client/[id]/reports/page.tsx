@@ -11,9 +11,8 @@ interface PageProps {
   searchParams: Promise<{ year?: string; tab?: string; period?: string }>
 }
 
-const DPS_API    = 'https://cabinet.tax.gov.ua/ws/api'
-const DPS_PUBLIC = 'https://cabinet.tax.gov.ua/ws/public_api'
-const DPS_A      = 'https://cabinet.tax.gov.ua/ws/a'
+const DPS_API = 'https://cabinet.tax.gov.ua/ws/api'
+const DPS_A   = 'https://cabinet.tax.gov.ua/ws/a'
 
 async function fetchReports(
   clientId: string,

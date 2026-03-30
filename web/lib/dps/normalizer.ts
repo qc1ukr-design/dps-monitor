@@ -233,8 +233,12 @@ export function normalizeDocuments(raw: unknown): DocumentsList {
   return { documents: [], total: 0 }
 }
 
-function _mapStatusCode(code: unknown): IncomingDocument['status'] {
-  const s = String(code ?? '')
+function _mapStatusCode(row: Record<string, unknown>): IncomingDocument['status'] {
+  // ws/public_api/post/incoming: isRead (false=new, true=read)
+  if (row.isRead !== undefined) {
+    return (row.isRead === true || row.isRead === 1 || row.isRead === '1') ? 'read' : 'new'
+  }
+  const s = String(row.statusId ?? row.statusCode ?? row.status ?? row.STATUS_CODE ?? row.STATUS ?? '1')
   if (s === '1') return 'new'
   if (s === '2') return 'read'
   if (s === '3') return 'answered'
@@ -244,14 +248,15 @@ function _mapStatusCode(code: unknown): IncomingDocument['status'] {
 function _mapDocumentRows(arr: Record<string, unknown>[]): IncomingDocument[] {
   return arr.map((row, idx) => ({
     // ws/api/corr/correspondence fields: id, num, dget, typeName, name, statusId, orgName, hasFiles
+    // ws/public_api/post/incoming fields: id, idContent, cdoc, text, dateIn, csti, isRead, name, p7s
     id: str(row.id ?? row.docId ?? row.ID ?? String(idx)),
-    number: str(row.num ?? row.docNumber ?? row.number ?? row.DOC_NUMBER ?? row.NUM ?? ''),
-    date: str(row.dget ?? row.docDate ?? row.date ?? row.DOC_DATE ?? row.DATE ?? ''),
-    type: str(row.typeName ?? row.docTypeName ?? row.type ?? row.DOC_TYPE_NAME ?? row.TYPE_NAME ?? ''),
-    subject: str(row.name ?? row.docName ?? row.subject ?? row.DOC_NAME ?? row.TITLE ?? ''),
-    status: _mapStatusCode(row.statusId ?? row.statusCode ?? row.status ?? row.STATUS_CODE ?? row.STATUS ?? '1'),
-    fromOrg: str(row.orgName ?? row.fromOrg ?? row.ORG_NAME ?? row.FROM_ORG ?? ''),
-    hasAttachments: !!(row.hasFiles ?? row.hasAttachments ?? row.HAS_FILES ?? false),
+    number: str(row.idContent ?? row.codRegdocRef ?? row.num ?? row.docNumber ?? row.number ?? row.DOC_NUMBER ?? row.NUM ?? ''),
+    date: str(row.dateIn ?? row.operDate ?? row.dget ?? row.docDate ?? row.date ?? row.DOC_DATE ?? row.DATE ?? ''),
+    type: str(row.cdoc ?? row.typeName ?? row.docTypeName ?? row.type ?? row.DOC_TYPE_NAME ?? row.TYPE_NAME ?? ''),
+    subject: str(row.text ?? row.name ?? row.docName ?? row.subject ?? row.DOC_NAME ?? row.TITLE ?? ''),
+    status: _mapStatusCode(row),
+    fromOrg: str(row.csti ?? row.orgName ?? row.fromOrg ?? row.ORG_NAME ?? row.FROM_ORG ?? ''),
+    hasAttachments: !!(row.p7s ?? row.hasFiles ?? row.hasAttachments ?? row.HAS_FILES ?? false),
   }))
 }
 

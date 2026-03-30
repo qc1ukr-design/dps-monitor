@@ -37,9 +37,8 @@ async function fetchReports(
     return { reports: [], total: 0, hasToken: false, isMock: true, tokenExpired: false }
   }
 
-  const urlPub = `${DPS_PUBLIC}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
-  const url    = `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
-  const urlA   = `${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
+  const url  = `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
+  const urlA = `${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
   const opts   = { Accept: 'application/json' }
   let kepDebug = '', uuidDebug = ''
 

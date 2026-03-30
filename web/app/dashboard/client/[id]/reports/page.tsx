@@ -51,12 +51,15 @@ async function fetchReports(
     // For ЮО: sign with ЄДРПОУ (8-digit) to get org context; for ФО: sign with kep_tax_id (РНОКПП)
     const signTaxId = (clientEdrpou && /^\d{8}$/.test(clientEdrpou)) ? clientEdrpou : kepTaxId
 
-    // 1. Raw KEP auth on public_api — works for ЮО (signs ЄДРПОУ, returns org context)
+    // 1. OAuth with cert РНОКПП → always gets personal ФО context
+    //    For ЮО: pass result + raw debug, but only show if J-forms present
+    //    For ФО: always use this result
+    //    For ЮО with only F-forms (personal director) → try ws/a fallback
     try {
-      const sig = await signWithKepDecrypted(kepDecrypted, kepPwd, signTaxId)
-      const res = await fetch(urlPub, {
-        headers: { Authorization: sig, ...opts },
-        signal: AbortSignal.timeout(15000), cache: 'no-store',
+      const { accessToken } = await loginWithKep(kepDecrypted, kepPwd, kepTaxId)
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}`, ...opts },
+        signal: AbortSignal.timeout(12000), cache: 'no-store',
       })
       const rawText = await res.text()
       if (res.ok) {
@@ -64,33 +67,46 @@ async function fetchReports(
         try { rawJson = JSON.parse(rawText) } catch { /* not JSON */ }
         if (rawJson !== null) {
           const result = normalizeReports(rawJson)
-          // Temporary debug: if empty, expose raw to UI
-          if (result.reports.length === 0) {
-            kepDebug = `pub→200 empty. raw: ${rawText.slice(0, 300)}`
-          } else {
+          const isYuo = !!(clientEdrpou && /^\d{8}$/.test(clientEdrpou))
+          // For ЮО: skip if result only contains F-forms (ФО personal forms)
+          const hasJForms = result.reports.some(r => r.formCode?.startsWith('J'))
+          if (!isYuo || hasJForms) {
             return { ...result, hasToken: true, isMock: false, tokenExpired: false }
           }
+          kepDebug = `oauth→ЮО only F-forms(${result.reports.length})`
         } else {
-          kepDebug = `pub→200 non-JSON: ${rawText.slice(0, 200)}`
+          kepDebug = `oauth→200 non-JSON`
         }
       } else {
-        kepDebug = `pub→${res.status}: ${rawText.slice(0, 200)}`
+        kepDebug = `oauth→${res.status}: ${rawText.slice(0, 100)}`
       }
-    } catch (e) { kepDebug = `pub→${String(e).slice(0, 200)}` }
+    } catch (e) { kepDebug = `oauth→${String(e).slice(0, 100)}` }
 
-    // 2. OAuth Bearer on ws/api — works for ФО only
-    // Skip for ЮО: OAuth returns personal ФО director context (F-forms), NOT ЮО J-forms
+    // 2. For ЮО: try ws/public_api/regdoc/list with ЄДРПОУ KEP signature + tin param
     const isYuo = !!(clientEdrpou && /^\d{8}$/.test(clientEdrpou))
-    if (!isYuo) {
+    if (isYuo) {
+      const urlPubTin = `${DPS_PUBLIC}/regdoc/list?tin=${signTaxId}&periodYear=${year}&page=0&size=100&sort=dget,desc`
       try {
-        const { accessToken } = await loginWithKep(kepDecrypted, kepPwd, kepTaxId)
-        const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${accessToken}`, ...opts },
-          signal: AbortSignal.timeout(12000), cache: 'no-store',
+        const sig = await signWithKepDecrypted(kepDecrypted, kepPwd, signTaxId)
+        const res = await fetch(urlPubTin, {
+          headers: { Authorization: sig, ...opts },
+          signal: AbortSignal.timeout(15000), cache: 'no-store',
         })
-        if (res.ok) return { ...normalizeReports(await res.json()), hasToken: true, isMock: false, tokenExpired: false }
-        kepDebug += ` oauth→${res.status}`
-      } catch (e) { kepDebug += ` oauth→${String(e).slice(0, 80)}` }
+        const rawText = await res.text()
+        if (res.ok) {
+          let rawJson: unknown = null
+          try { rawJson = JSON.parse(rawText) } catch { /* not JSON */ }
+          if (rawJson !== null) {
+            const result = normalizeReports(rawJson)
+            if (result.reports.length > 0) return { ...result, hasToken: true, isMock: false, tokenExpired: false }
+            kepDebug += ` pub+tin→200 empty raw:${rawText.slice(0, 150)}`
+          } else {
+            kepDebug += ` pub+tin→200 non-JSON:${rawText.slice(0, 100)}`
+          }
+        } else {
+          kepDebug += ` pub+tin→${res.status}:${rawText.slice(0, 100)}`
+        }
+      } catch (e) { kepDebug += ` pub+tin→${String(e).slice(0, 80)}` }
     }
   }
 

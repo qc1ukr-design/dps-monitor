@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
+import { loginWithKep } from '@/lib/dps/dps-auth'
 import { normalizeDocuments } from '@/lib/dps/normalizer'
 import type { DocumentsList, IncomingDocument } from '@/lib/dps/types'
 
@@ -9,7 +10,8 @@ interface PageProps {
   params: Promise<{ id: string }>
 }
 
-const DPS_A = 'https://cabinet.tax.gov.ua/ws/a'
+const DPS_API = 'https://cabinet.tax.gov.ua/ws/api'
+const DPS_A   = 'https://cabinet.tax.gov.ua/ws/a'
 
 async function fetchDocuments(
   clientId: string,
@@ -19,33 +21,62 @@ async function fetchDocuments(
 
   const { data: tokenRow } = await supabase
     .from('api_tokens')
-    .select('token_encrypted')
+    .select('kep_encrypted, kep_password_encrypted, kep_tax_id, token_encrypted')
     .eq('client_id', clientId)
     .eq('user_id', userId)
     .single()
 
-  if (!tokenRow?.token_encrypted) {
+  const hasKep  = !!(tokenRow?.kep_encrypted && tokenRow?.kep_password_encrypted)
+  const hasUuid = !!tokenRow?.token_encrypted
+
+  if (!hasKep && !hasUuid) {
     return { documents: [], total: 0, hasToken: false, isMock: true, tokenExpired: false }
   }
 
-  try {
-    const token = decrypt(tokenRow.token_encrypted).trim()
-    const res = await fetch(
-      `${DPS_A}/corr/correspondence?page=0&size=50`,
-      {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+  const opts = { Accept: 'application/json' }
+
+  // ── KEP: OAuth2 → ws/api ───────────────────────────────────────────────────
+  if (hasKep) {
+    try {
+      const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
+      const kepPass      = decrypt(tokenRow!.kep_password_encrypted)
+      const taxId        = (tokenRow!.kep_tax_id ?? '').trim()
+
+      const { accessToken } = await loginWithKep(kepDecrypted, kepPass, taxId)
+      const res = await fetch(`${DPS_API}/corr/correspondence?page=0&size=50`, {
+        headers: { Authorization: `Bearer ${accessToken}`, ...opts },
+        signal: AbortSignal.timeout(12000),
+        cache: 'no-store',
+      })
+      if (res.ok) {
+        const raw = await res.json()
+        return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
+      }
+    } catch {
+      // fall through to UUID fallback
+    }
+  }
+
+  // ── Fallback: UUID Bearer token via ws/a ────────────────────────────────────
+  if (hasUuid) {
+    try {
+      const token = decrypt(tokenRow!.token_encrypted).trim()
+      const res = await fetch(`${DPS_A}/corr/correspondence?page=0&size=50`, {
+        headers: { Authorization: `Bearer ${token}`, ...opts },
         signal: AbortSignal.timeout(15000),
         cache: 'no-store',
+      })
+      if (res.ok) {
+        const raw = await res.json()
+        return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
       }
-    )
-    if (res.ok) {
-      const raw = await res.json()
-      return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
+      return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: true }
+    } catch {
+      // fall through
     }
-    return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: true }
-  } catch {
-    return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: false }
   }
+
+  return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: false }
 }
 
 function statusBadge(status: IncomingDocument['status']) {

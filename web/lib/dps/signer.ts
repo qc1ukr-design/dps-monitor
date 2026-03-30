@@ -662,6 +662,60 @@ export async function getCertTaxId(kepDecrypted: string, password: string): Prom
 }
 
 /**
+ * Get the stamp (seal / печатка) key from the box.
+ * For ЮО: the stamp cert has ЄДРПОУ as serialNumber.
+ * Returns null if no stamp key is found.
+ */
+function getStampKey(box: InstanceType<typeof jk.Box>): {
+  priv: unknown
+  cert: InstanceType<typeof jk.Certificate>
+} | null {
+  type KeyEntry = { priv: unknown; cert: InstanceType<typeof jk.Certificate> }
+  try {
+    const k = box.keyFor('stamp', undefined) as KeyEntry
+    if (k?.priv && k?.cert) return k
+  } catch { /* no stamp key */ }
+  return null
+}
+
+/**
+ * Returns ЄДРПОУ from the stamp (seal) certificate in the box.
+ * Used for ЮО OAuth: stamp cert has serialNumber = ЄДРПОУ → OAuth returns ЮО context.
+ * Returns null if no stamp cert with 8-digit ЄДРПОУ exists.
+ */
+export async function getStampCertTaxId(kepDecrypted: string, password: string): Promise<string | null> {
+  const box = await loadBoxFromDecrypted(kepDecrypted, password)
+  const stampKey = getStampKey(box)
+  if (!stampKey) return null
+  const info = extractCertInfo(stampKey.cert)
+  return /^\d{8}$/.test(info.taxId) ? info.taxId : null
+}
+
+/**
+ * Sign data using the STAMP (печатка) key from a ЮО KEP bundle.
+ * The stamp cert's serialNumber = ЄДРПОУ, so DPS OAuth will accept this
+ * signature for ЮО context authentication.
+ * Throws if no stamp key is found in the box.
+ */
+export async function signWithStampKey(
+  kepDecrypted: string,
+  password: string,
+  data: string | Buffer
+): Promise<string> {
+  const box = await loadBoxFromDecrypted(kepDecrypted, password)
+  const stampKey = getStampKey(box)
+  if (!stampKey) throw new Error('NO_STAMP_KEY: No stamp/seal certificate found in KEP bundle')
+
+  const dataBuffer = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8')
+  const message = await box.sign(dataBuffer, stampKey.priv, null, {
+    tsp: false,
+    detached: false,
+  })
+  const asn1 = (message as { as_asn1: () => Buffer }).as_asn1()
+  return asn1.toString('base64')
+}
+
+/**
  * Sign `data` using KEP stored as a decrypted DB value.
  * Handles both legacy (raw pfxBase64) and v2 (JSON multi-file) formats.
  * This is the preferred function to use from API routes after decrypting from DB.

@@ -2,8 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
-import { loginWithKep } from '@/lib/dps/dps-auth'
-import { signWithKepDecrypted } from '@/lib/dps/signer'
+import { loginWithKep, loginWithKepAsYuo } from '@/lib/dps/dps-auth'
 import { normalizeReports } from '@/lib/dps/normalizer'
 import type { ReportsList, TaxReport, BudgetCalculations } from '@/lib/dps/types'
 
@@ -47,65 +46,39 @@ async function fetchReports(
     const kepPwd       = decrypt(tokenRow!.kep_password_encrypted)
     const kepTaxId     = (tokenRow!.kep_tax_id ?? '').trim()
 
-    // For ЮО: sign with ЄДРПОУ (8-digit) to get org context; for ФО: sign with kep_tax_id (РНОКПП)
-    const signTaxId = (clientEdrpou && /^\d{8}$/.test(clientEdrpou)) ? clientEdrpou : kepTaxId
+    const isYuo = !!(clientEdrpou && /^\d{8}$/.test(clientEdrpou))
 
-    // 1. OAuth with cert РНОКПП → always gets personal ФО context
-    //    For ЮО: pass result + raw debug, but only show if J-forms present
-    //    For ФО: always use this result
-    //    For ЮО with only F-forms (personal director) → try ws/a fallback
-    try {
-      const { accessToken } = await loginWithKep(kepDecrypted, kepPwd, kepTaxId)
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}`, ...opts },
-        signal: AbortSignal.timeout(12000), cache: 'no-store',
-      })
-      const rawText = await res.text()
-      if (res.ok) {
-        let rawJson: unknown = null
-        try { rawJson = JSON.parse(rawText) } catch { /* not JSON */ }
-        if (rawJson !== null) {
-          const result = normalizeReports(rawJson)
-          const isYuo = !!(clientEdrpou && /^\d{8}$/.test(clientEdrpou))
-          // For ЮО: skip if result only contains F-forms (ФО personal forms)
-          const hasJForms = result.reports.some(r => r.formCode?.startsWith('J'))
-          if (!isYuo || hasJForms) {
+    // 1. For ЮО: try OAuth with STAMP (seal/печатка) key — serialNumber=ЄДРПОУ → ЮО context
+    if (isYuo) {
+      try {
+        const yuoSession = await loginWithKepAsYuo(kepDecrypted, kepPwd)
+        if (yuoSession) {
+          const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${yuoSession.accessToken}`, ...opts },
+            signal: AbortSignal.timeout(12000), cache: 'no-store',
+          })
+          if (res.ok) {
+            const result = normalizeReports(await res.json())
             return { ...result, hasToken: true, isMock: false, tokenExpired: false }
           }
-          kepDebug = `oauth→ЮО only F-forms(${result.reports.length})`
+          kepDebug = `yuo-stamp→${res.status}`
         } else {
-          kepDebug = `oauth→200 non-JSON`
+          kepDebug = `yuo-stamp→no stamp key`
         }
-      } else {
-        kepDebug = `oauth→${res.status}: ${rawText.slice(0, 100)}`
-      }
-    } catch (e) { kepDebug = `oauth→${String(e).slice(0, 100)}` }
+      } catch (e) { kepDebug = `yuo-stamp→${String(e).slice(0, 100)}` }
+    }
 
-    // 2. For ЮО: try ws/public_api/regdoc/list with ЄДРПОУ KEP signature + tin param
-    const isYuo = !!(clientEdrpou && /^\d{8}$/.test(clientEdrpou))
-    if (isYuo) {
-      const urlPubTin = `${DPS_PUBLIC}/regdoc/list?tin=${signTaxId}&periodYear=${year}&page=0&size=100&sort=dget,desc`
+    // 2. For ФО: OAuth with director/sign cert РНОКПП → personal context
+    if (!isYuo) {
       try {
-        const sig = await signWithKepDecrypted(kepDecrypted, kepPwd, signTaxId)
-        const res = await fetch(urlPubTin, {
-          headers: { Authorization: sig, ...opts },
-          signal: AbortSignal.timeout(15000), cache: 'no-store',
+        const { accessToken } = await loginWithKep(kepDecrypted, kepPwd, kepTaxId)
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${accessToken}`, ...opts },
+          signal: AbortSignal.timeout(12000), cache: 'no-store',
         })
-        const rawText = await res.text()
-        if (res.ok) {
-          let rawJson: unknown = null
-          try { rawJson = JSON.parse(rawText) } catch { /* not JSON */ }
-          if (rawJson !== null) {
-            const result = normalizeReports(rawJson)
-            if (result.reports.length > 0) return { ...result, hasToken: true, isMock: false, tokenExpired: false }
-            kepDebug += ` pub+tin→200 empty raw:${rawText.slice(0, 150)}`
-          } else {
-            kepDebug += ` pub+tin→200 non-JSON:${rawText.slice(0, 100)}`
-          }
-        } else {
-          kepDebug += ` pub+tin→${res.status}:${rawText.slice(0, 100)}`
-        }
-      } catch (e) { kepDebug += ` pub+tin→${String(e).slice(0, 80)}` }
+        if (res.ok) return { ...normalizeReports(await res.json()), hasToken: true, isMock: false, tokenExpired: false }
+        kepDebug = `oauth→${res.status}`
+      } catch (e) { kepDebug = `oauth→${String(e).slice(0, 100)}` }
     }
   }
 

@@ -18,7 +18,7 @@
  * ALL taxpayers share the same client credential; the per-user identity
  * is established via the KEP signature in the password field.
  */
-import { signWithKepDecrypted, getCertTaxId } from './signer'
+import { signWithKepDecrypted, getCertTaxId, signWithStampKey, getStampCertTaxId } from './signer'
 
 const DPS_OAUTH_URL = 'https://cabinet.tax.gov.ua/ws/auth/oauth/token'
 
@@ -32,6 +32,55 @@ const DPS_CLIENT_BASIC = 'QUU2ODY3NjY0QzA5NkM4M0UwNTMwMTAxMDA3RjQ1RjQ6QUU2ODY3Nj
 export interface DpsSession {
   accessToken: string
   expiresIn: number // seconds (typically 600)
+  taxIdUsed?: string // taxId that was successfully used for OAuth
+}
+
+/**
+ * Try to authenticate as ЮО using the stamp (seal) key.
+ * The stamp cert has ЄДРПОУ as serialNumber → OAuth returns ЮО context.
+ * Returns null if no stamp key found or OAuth fails.
+ */
+export async function loginWithKepAsYuo(
+  kepDecrypted: string,
+  password: string,
+): Promise<DpsSession | null> {
+  const edrpou = await getStampCertTaxId(kepDecrypted, password)
+  if (!edrpou) return null
+
+  const username = `${edrpou}-${edrpou}-${Date.now()}`
+  let signature: string
+  try {
+    signature = await signWithStampKey(kepDecrypted, password, edrpou)
+  } catch (e) {
+    console.log('[dps-auth] loginWithKepAsYuo stamp sign failed:', e)
+    return null
+  }
+
+  const qs = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`
+  const url = `${DPS_OAUTH_URL}?${qs}`
+  console.log('[dps-auth] YUO OAuth POST | edrpou:', edrpou, '| sigLen:', signature.length)
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Authorization': `Basic ${DPS_CLIENT_BASIC}` },
+    signal: AbortSignal.timeout(25000),
+    cache: 'no-store',
+  })
+
+  if (!res.ok) {
+    const preview = await res.text().catch(() => '')
+    console.log('[dps-auth] YUO OAuth error', res.status, preview.slice(0, 200))
+    return null
+  }
+
+  const data = await res.json() as { access_token: string; expires_in?: number }
+  if (!data.access_token) return null
+
+  return {
+    accessToken: data.access_token,
+    expiresIn: data.expires_in ?? 600,
+    taxIdUsed: edrpou,
+  }
 }
 
 /**

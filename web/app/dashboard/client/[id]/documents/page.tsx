@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
 import { loginWithKep } from '@/lib/dps/dps-auth'
+import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeDocuments } from '@/lib/dps/normalizer'
 import type { DocumentsList, IncomingDocument } from '@/lib/dps/types'
 
@@ -10,8 +11,9 @@ interface PageProps {
   params: Promise<{ id: string }>
 }
 
-const DPS_API = 'https://cabinet.tax.gov.ua/ws/api'
-const DPS_A   = 'https://cabinet.tax.gov.ua/ws/a'
+const DPS_PUBLIC = 'https://cabinet.tax.gov.ua/ws/public_api'
+const DPS_API    = 'https://cabinet.tax.gov.ua/ws/api'
+const DPS_A      = 'https://cabinet.tax.gov.ua/ws/a'
 
 async function fetchDocuments(
   clientId: string,
@@ -37,28 +39,25 @@ async function fetchDocuments(
 
   const dbg: string[] = []
 
-  // ── KEP: OAuth2 → ws/api (try multiple possible endpoints) ─────────────────
+  // ── KEP: ws/public_api (direct KEP Bearer) ────────────────────────────────
   if (hasKep) {
     try {
       const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
       const kepPass      = decrypt(tokenRow!.kep_password_encrypted)
       const taxId        = (tokenRow!.kep_tax_id ?? '').trim()
+      const kepAuth      = await signWithKepDecrypted(kepDecrypted, kepPass, taxId)
 
-      const { accessToken } = await loginWithKep(kepDecrypted, kepPass, taxId)
-      dbg.push(`token=ok`)
-
-      const endpoints = [
-        `${DPS_API}/corr/correspondence?page=0&size=50`,
-        `${DPS_API}/corr/inbox?page=0&size=50`,
-        `${DPS_API}/inbox/list?page=0&size=50`,
-        `${DPS_A}/corr/correspondence?page=0&size=50`,
+      const publicEndpoints = [
+        `${DPS_PUBLIC}/post/incoming?page=0&size=50`,
+        `${DPS_PUBLIC}/post/inbox?page=0&size=50`,
+        `${DPS_PUBLIC}/corr/incoming?page=0&size=50`,
       ]
-      for (const ep of endpoints) {
+      for (const ep of publicEndpoints) {
         const label = ep.replace('https://cabinet.tax.gov.ua', '')
         try {
           const res = await fetch(ep, {
-            headers: { Authorization: `Bearer ${accessToken}`, ...opts },
-            signal: AbortSignal.timeout(8000),
+            headers: { Authorization: kepAuth, ...opts },
+            signal: AbortSignal.timeout(10000),
             cache: 'no-store',
           })
           if (res.ok) {
@@ -69,6 +68,35 @@ async function fetchDocuments(
         } catch {
           dbg.push(`${label}→err`)
         }
+      }
+
+      // ── KEP: OAuth2 → ws/api ──────────────────────────────────────────────
+      try {
+        const { accessToken } = await loginWithKep(kepDecrypted, kepPass, taxId)
+        dbg.push(`oauth=ok`)
+        const oauthEndpoints = [
+          `${DPS_API}/post/incoming?page=0&size=50`,
+          `${DPS_API}/corr/incoming?page=0&size=50`,
+        ]
+        for (const ep of oauthEndpoints) {
+          const label = ep.replace('https://cabinet.tax.gov.ua', '')
+          try {
+            const res = await fetch(ep, {
+              headers: { Authorization: `Bearer ${accessToken}`, ...opts },
+              signal: AbortSignal.timeout(8000),
+              cache: 'no-store',
+            })
+            if (res.ok) {
+              const raw = await res.json()
+              return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
+            }
+            dbg.push(`${label}→${res.status}`)
+          } catch {
+            dbg.push(`${label}→err`)
+          }
+        }
+      } catch (e) {
+        dbg.push(`oauth→${String(e).slice(0, 60)}`)
       }
     } catch (e) {
       dbg.push(`kep→${String(e).slice(0, 80)}`)

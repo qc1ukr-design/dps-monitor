@@ -2,7 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
-import { loginWithKep, loginWithKepAsYuo } from '@/lib/dps/dps-auth'
+import { loginWithKep } from '@/lib/dps/dps-auth'
+import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeReports } from '@/lib/dps/normalizer'
 import type { ReportsList, TaxReport, BudgetCalculations } from '@/lib/dps/types'
 
@@ -46,39 +47,47 @@ async function fetchReports(
     const kepTaxId     = (tokenRow!.kep_tax_id ?? '').trim()
 
     const isYuo = !!(clientEdrpou && /^\d{8}$/.test(clientEdrpou))
+    // For ЮО: sign with ЄДРПОУ (same as documents/sync); for ФО: sign with kep_tax_id
+    const signTaxId = isYuo ? clientEdrpou! : kepTaxId
 
-    // 1. For ЮО: try OAuth with STAMP (seal/печатка) key — serialNumber=ЄДРПОУ → ЮО context
-    if (isYuo) {
-      try {
-        const yuoSession = await loginWithKepAsYuo(kepDecrypted, kepPwd)
-        if (yuoSession) {
-          const res = await fetch(url, {
-            headers: { Authorization: `Bearer ${yuoSession.accessToken}`, ...opts },
-            signal: AbortSignal.timeout(12000), cache: 'no-store',
-          })
-          if (res.ok) {
-            const result = normalizeReports(await res.json())
-            return { ...result, hasToken: true, isMock: false, tokenExpired: false }
-          }
-          kepDebug = `yuo-stamp→${res.status}`
-        } else {
-          kepDebug = `yuo-stamp→no stamp key`
+    // 1. Raw KEP signature on ws/api/regdoc/list (no "Bearer" — same auth as documents page)
+    //    Works for ЮО: signs ЄДРПОУ with director key → ЮО context (same as post/incoming)
+    try {
+      const sig = await signWithKepDecrypted(kepDecrypted, kepPwd, signTaxId)
+      const res = await fetch(url, {
+        headers: { Authorization: sig, ...opts },
+        signal: AbortSignal.timeout(15000), cache: 'no-store',
+      })
+      const rawText = await res.text()
+      if (res.ok) {
+        let rawJson: unknown = null
+        try { rawJson = JSON.parse(rawText) } catch { /* not json */ }
+        if (rawJson !== null) return { ...normalizeReports(rawJson), hasToken: true, isMock: false, tokenExpired: false }
+        kepDebug = `kep-raw→200 non-JSON:${rawText.slice(0, 80)}`
+      } else {
+        kepDebug = `kep-raw→${res.status}:${rawText.slice(0, 120)}`
+      }
+    } catch (e) { kepDebug = `kep-raw→${String(e).slice(0, 100)}` }
+
+    // 2. OAuth Bearer (works for ФО; for ЮО may return F-forms only)
+    try {
+      const { accessToken } = await loginWithKep(kepDecrypted, kepPwd, kepTaxId)
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}`, ...opts },
+        signal: AbortSignal.timeout(12000), cache: 'no-store',
+      })
+      if (res.ok) {
+        const result = normalizeReports(await res.json())
+        // For ЮО: only accept if J-forms present (ЮО reports), skip if only F-forms (ФО personal)
+        const hasJForms = result.reports.some(r => r.formCode?.startsWith('J'))
+        if (!isYuo || hasJForms) {
+          return { ...result, hasToken: true, isMock: false, tokenExpired: false }
         }
-      } catch (e) { kepDebug = `yuo-stamp→${String(e).slice(0, 100)}` }
-    }
-
-    // 2. For ФО: OAuth with director/sign cert РНОКПП → personal context
-    if (!isYuo) {
-      try {
-        const { accessToken } = await loginWithKep(kepDecrypted, kepPwd, kepTaxId)
-        const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${accessToken}`, ...opts },
-          signal: AbortSignal.timeout(12000), cache: 'no-store',
-        })
-        if (res.ok) return { ...normalizeReports(await res.json()), hasToken: true, isMock: false, tokenExpired: false }
-        kepDebug = `oauth→${res.status}`
-      } catch (e) { kepDebug = `oauth→${String(e).slice(0, 100)}` }
-    }
+        kepDebug += ` oauth→only-F(${result.reports.length})`
+      } else {
+        kepDebug += ` oauth→${res.status}`
+      }
+    } catch (e) { kepDebug += ` oauth→${String(e).slice(0, 80)}` }
   }
 
   if (hasUuid) {

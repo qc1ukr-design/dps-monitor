@@ -62,7 +62,16 @@ async function fetchDocuments(
           })
           if (res.ok) {
             const raw = await res.json()
-            return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
+            // Debug: log first item keys to diagnose field mapping
+            if (raw && typeof raw === 'object') {
+              const r = raw as Record<string, unknown>
+              const arr = Array.isArray(r.content) ? r.content : Array.isArray(r.data) ? r.data : Array.isArray(raw) ? raw : []
+              if (arr.length > 0) {
+                const first = arr[0] as Record<string, unknown>
+                dbg.push(`fields:${Object.keys(first).join(',')}`)
+              }
+            }
+            return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false, debugError: dbg.join(' | ') }
           }
           dbg.push(`${label}→${res.status}`)
         } catch {
@@ -173,6 +182,9 @@ export default async function DocumentsPage({ params }: PageProps) {
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">
+      {debugError && (
+        <p className="font-mono text-xs text-red-600 break-all bg-gray-50 p-2 rounded">{debugError}</p>
+      )}
       {/* Header */}
       <div>
         <Link href={`/dashboard/client/${id}`} className="text-sm text-gray-400 hover:text-gray-600">

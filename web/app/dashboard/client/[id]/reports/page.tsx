@@ -51,7 +51,7 @@ async function fetchReports(
     if (isYuo) {
       try {
         const yuoResult = await loginWithKepAsYuo(kepDecrypted, kepPwd, clientEdrpou!)
-        if (yuoResult && 'accessToken' in yuoResult) {
+        if (typeof yuoResult === 'object') {
           const res = await fetch(url, {
             headers: { Authorization: `Bearer ${yuoResult.accessToken}`, ...opts },
             signal: AbortSignal.timeout(12000), cache: 'no-store',
@@ -61,7 +61,7 @@ async function fetchReports(
           }
           kepDebug = `yuo-oauth→bearer:${res.status}`
         } else {
-          kepDebug = `yuo-oauth→failed:${String(yuoResult).slice(0, 100)}`
+          kepDebug = `yuo-oauth→${yuoResult.slice(0, 150)}`
         }
       } catch (e) { kepDebug = `yuo-oauth→${String(e).slice(0, 150)}` }
     }

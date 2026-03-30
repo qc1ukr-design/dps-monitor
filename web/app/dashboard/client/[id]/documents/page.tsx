@@ -16,7 +16,7 @@ const DPS_A   = 'https://cabinet.tax.gov.ua/ws/a'
 async function fetchDocuments(
   clientId: string,
   userId: string
-): Promise<DocumentsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean }> {
+): Promise<DocumentsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean; debugError?: string }> {
   const supabase = await createClient()
 
   const { data: tokenRow } = await supabase
@@ -35,7 +35,9 @@ async function fetchDocuments(
 
   const opts = { Accept: 'application/json' }
 
-  // ── KEP: OAuth2 → ws/api ───────────────────────────────────────────────────
+  const dbg: string[] = []
+
+  // ── KEP: OAuth2 → ws/api (try multiple possible endpoints) ─────────────────
   if (hasKep) {
     try {
       const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
@@ -43,17 +45,33 @@ async function fetchDocuments(
       const taxId        = (tokenRow!.kep_tax_id ?? '').trim()
 
       const { accessToken } = await loginWithKep(kepDecrypted, kepPass, taxId)
-      const res = await fetch(`${DPS_API}/corr/correspondence?page=0&size=50`, {
-        headers: { Authorization: `Bearer ${accessToken}`, ...opts },
-        signal: AbortSignal.timeout(12000),
-        cache: 'no-store',
-      })
-      if (res.ok) {
-        const raw = await res.json()
-        return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
+      dbg.push(`token=ok`)
+
+      const endpoints = [
+        `${DPS_API}/corr/correspondence?page=0&size=50`,
+        `${DPS_API}/corr/inbox?page=0&size=50`,
+        `${DPS_API}/inbox/list?page=0&size=50`,
+        `${DPS_A}/corr/correspondence?page=0&size=50`,
+      ]
+      for (const ep of endpoints) {
+        const label = ep.replace('https://cabinet.tax.gov.ua', '')
+        try {
+          const res = await fetch(ep, {
+            headers: { Authorization: `Bearer ${accessToken}`, ...opts },
+            signal: AbortSignal.timeout(8000),
+            cache: 'no-store',
+          })
+          if (res.ok) {
+            const raw = await res.json()
+            return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
+          }
+          dbg.push(`${label}→${res.status}`)
+        } catch (e) {
+          dbg.push(`${label}→err`)
+        }
       }
-    } catch {
-      // fall through to UUID fallback
+    } catch (e) {
+      dbg.push(`kep→${String(e).slice(0, 80)}`)
     }
   }
 
@@ -70,13 +88,13 @@ async function fetchDocuments(
         const raw = await res.json()
         return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
       }
-      return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: true }
+      dbg.push(`uuid-ws/a→${res.status}`)
     } catch {
-      // fall through
+      dbg.push(`uuid→err`)
     }
   }
 
-  return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: false }
+  return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: false, debugError: dbg.join(' | ') }
 }
 
 function statusBadge(status: IncomingDocument['status']) {
@@ -123,7 +141,7 @@ export default async function DocumentsPage({ params }: PageProps) {
 
   if (error || !client) notFound()
 
-  const { documents, total, hasToken, isMock, tokenExpired } = await fetchDocuments(id, user.id)
+  const { documents, total, hasToken, isMock, tokenExpired, debugError } = await fetchDocuments(id, user.id)
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">
@@ -192,6 +210,9 @@ export default async function DocumentsPage({ params }: PageProps) {
               cabinet.tax.gov.ua →
             </a>
           </p>
+          {debugError && (
+            <p className="mt-2 font-mono text-xs text-red-600 break-all">{debugError}</p>
+          )}
         </div>
       )}
 

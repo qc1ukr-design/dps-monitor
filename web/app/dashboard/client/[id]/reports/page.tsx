@@ -55,16 +55,24 @@ async function fetchReports(
         signal: AbortSignal.timeout(15000), cache: 'no-store',
       })
       const rawText = await res.text()
-      console.log(`[reports] public_api status=${res.status} taxId=${kepTaxId} body=${rawText.slice(0, 400)}`)
       if (res.ok) {
         let rawJson: unknown = null
         try { rawJson = JSON.parse(rawText) } catch { /* not JSON */ }
-        if (rawJson !== null) return { ...normalizeReports(rawJson), hasToken: true, isMock: false, tokenExpired: false }
-        kepDebug = `pub→200 non-JSON: ${rawText.slice(0, 80)}`
+        if (rawJson !== null) {
+          const result = normalizeReports(rawJson)
+          // Temporary debug: if empty, expose raw to UI
+          if (result.reports.length === 0) {
+            kepDebug = `pub→200 empty. raw: ${rawText.slice(0, 300)}`
+          } else {
+            return { ...result, hasToken: true, isMock: false, tokenExpired: false }
+          }
+        } else {
+          kepDebug = `pub→200 non-JSON: ${rawText.slice(0, 200)}`
+        }
       } else {
-        kepDebug = `pub→${res.status}: ${rawText.slice(0, 80)}`
+        kepDebug = `pub→${res.status}: ${rawText.slice(0, 200)}`
       }
-    } catch (e) { kepDebug = `pub→${String(e).slice(0, 80)}` }
+    } catch (e) { kepDebug = `pub→${String(e).slice(0, 200)}` }
 
     // 2. OAuth Bearer on ws/api — works for ФО (OAuth uses cert РНОКПП, personal context)
     try {

@@ -50,17 +50,24 @@ async function fetchDocuments(
         cache: 'no-store',
       })
       const rawText = await res.text()
-      console.log(`[documents] post/incoming status=${res.status} taxId=${taxId} body=${rawText.slice(0, 400)}`)
       if (res.ok) {
         let rawJson: unknown = null
         try { rawJson = JSON.parse(rawText) } catch { /* not JSON */ }
-        if (rawJson !== null) return { ...normalizeDocuments(rawJson), hasToken: true, isMock: false, tokenExpired: false }
-        kepDebug = `kep→200 non-JSON: ${rawText.slice(0, 80)}`
+        if (rawJson !== null) {
+          const result = normalizeDocuments(rawJson)
+          if (result.documents.length === 0) {
+            kepDebug = `kep→200 empty. raw: ${rawText.slice(0, 300)}`
+          } else {
+            return { ...result, hasToken: true, isMock: false, tokenExpired: false }
+          }
+        } else {
+          kepDebug = `kep→200 non-JSON: ${rawText.slice(0, 200)}`
+        }
       } else {
-        kepDebug = `kep→${res.status}: ${rawText.slice(0, 80)}`
+        kepDebug = `kep→${res.status}: ${rawText.slice(0, 200)}`
       }
     } catch (e) {
-      kepDebug = `kep→${String(e).slice(0, 100)}`
+      kepDebug = `kep→${String(e).slice(0, 200)}`
     }
   }
 

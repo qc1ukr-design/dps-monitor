@@ -19,7 +19,8 @@ const DPS_A      = 'https://cabinet.tax.gov.ua/ws/a'
 async function fetchReports(
   clientId: string,
   userId: string,
-  year: number
+  year: number,
+  clientEdrpou?: string
 ): Promise<ReportsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean; debugError?: string }> {
   const supabase = await createClient()
   const { data: tokenRow } = await supabase
@@ -47,9 +48,12 @@ async function fetchReports(
     const kepPwd       = decrypt(tokenRow!.kep_password_encrypted)
     const kepTaxId     = (tokenRow!.kep_tax_id ?? '').trim()
 
+    // For ЮО: sign with ЄДРПОУ (8-digit) to get org context; for ФО: sign with kep_tax_id (РНОКПП)
+    const signTaxId = (clientEdrpou && /^\d{8}$/.test(clientEdrpou)) ? clientEdrpou : kepTaxId
+
     // 1. Raw KEP auth on public_api — works for ЮО (signs ЄДРПОУ, returns org context)
     try {
-      const sig = await signWithKepDecrypted(kepDecrypted, kepPwd, kepTaxId)
+      const sig = await signWithKepDecrypted(kepDecrypted, kepPwd, signTaxId)
       const res = await fetch(urlPub, {
         headers: { Authorization: sig, ...opts },
         signal: AbortSignal.timeout(15000), cache: 'no-store',
@@ -180,7 +184,7 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
 
   const fetchYear = tab === 'submitted' ? CURRENT_YEAR : year
   const { reports, total, hasToken, isMock, tokenExpired, debugError } =
-    await fetchReports(id, user.id, fetchYear)
+    await fetchReports(id, user.id, fetchYear, client.edrpou ?? undefined)
 
   // Debt from cache
   const { data: budgetCache } = await supabase

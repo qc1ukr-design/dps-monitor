@@ -15,7 +15,8 @@ const DPS_A      = 'https://cabinet.tax.gov.ua/ws/a'
 
 async function fetchDocuments(
   clientId: string,
-  userId: string
+  userId: string,
+  clientEdrpou?: string
 ): Promise<DocumentsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean; debugError?: string }> {
   const supabase = await createClient()
 
@@ -41,7 +42,9 @@ async function fetchDocuments(
     try {
       const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
       const kepPass      = decrypt(tokenRow!.kep_password_encrypted)
-      const taxId        = (tokenRow!.kep_tax_id ?? '').trim()
+      const kepTaxId     = (tokenRow!.kep_tax_id ?? '').trim()
+      // For ЮО: sign with ЄДРПОУ (8-digit) for org context; ФО: use kep_tax_id
+      const taxId        = (clientEdrpou && /^\d{8}$/.test(clientEdrpou)) ? clientEdrpou : kepTaxId
       const kepAuth      = await signWithKepDecrypted(kepDecrypted, kepPass, taxId)
 
       const res = await fetch(`${DPS_PUBLIC}/post/incoming?page=0&size=50`, {
@@ -139,7 +142,7 @@ export default async function DocumentsPage({ params }: PageProps) {
 
   if (error || !client) notFound()
 
-  const { documents, total, hasToken, isMock, tokenExpired, debugError } = await fetchDocuments(id, user.id)
+  const { documents, total, hasToken, isMock, tokenExpired, debugError } = await fetchDocuments(id, user.id, client.edrpou ?? undefined)
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">

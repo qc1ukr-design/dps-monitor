@@ -78,27 +78,20 @@ async function fetchReports(
       }
     } catch (e) { kepDebug = `pub→${String(e).slice(0, 200)}` }
 
-    // 2. OAuth Bearer on ws/api — works for ФО (OAuth uses cert РНОКПП, personal context)
-    // Only use OAuth result if it returns actual reports (to avoid ФО context masking ЮО)
+    // 2. OAuth Bearer on ws/api — works for ФО only
+    // Skip for ЮО: OAuth returns personal ФО director context (F-forms), NOT ЮО J-forms
     const isYuo = !!(clientEdrpou && /^\d{8}$/.test(clientEdrpou))
-    try {
-      const { accessToken } = await loginWithKep(kepDecrypted, kepPwd, kepTaxId)
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${accessToken}`, ...opts },
-        signal: AbortSignal.timeout(12000), cache: 'no-store',
-      })
-      if (res.ok) {
-        const oauthResult = normalizeReports(await res.json())
-        // For ЮО: only return OAuth result if it has reports (F-forms = ФО director, not ЮО)
-        // For ФО: always return OAuth result
-        if (!isYuo || oauthResult.reports.length > 0) {
-          return { ...oauthResult, hasToken: true, isMock: false, tokenExpired: false }
-        }
-        kepDebug += ` oauth→200 empty(ФО ctx)`
-      } else {
+    if (!isYuo) {
+      try {
+        const { accessToken } = await loginWithKep(kepDecrypted, kepPwd, kepTaxId)
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${accessToken}`, ...opts },
+          signal: AbortSignal.timeout(12000), cache: 'no-store',
+        })
+        if (res.ok) return { ...normalizeReports(await res.json()), hasToken: true, isMock: false, tokenExpired: false }
         kepDebug += ` oauth→${res.status}`
-      }
-    } catch (e) { kepDebug += ` oauth→${String(e).slice(0, 80)}` }
+      } catch (e) { kepDebug += ` oauth→${String(e).slice(0, 80)}` }
+    }
   }
 
   if (hasUuid) {

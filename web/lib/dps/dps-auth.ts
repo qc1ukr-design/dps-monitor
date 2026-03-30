@@ -36,29 +36,39 @@ export interface DpsSession {
 }
 
 /**
- * Try to authenticate as ЮО using the stamp (seal) key.
- * The stamp cert has ЄДРПОУ as serialNumber → OAuth returns ЮО context.
- * Returns null if no stamp key found or OAuth fails.
+ * Try to authenticate as ЮО using director cert + org ЄДРПОУ in username.
+ *
+ * DPS Angular cabinet ЮО login format (from bundle analysis):
+ *   username = {РНОКПП}-{ЄДРПОУ}-{timestamp}  ← director РНОКПП + org ЄДРПОУ
+ *   password = sign(РНОКПП) with director cert  ← signs director's own РНОКПП
+ *
+ * Spring Security sees: "authenticate director РНОКПП in context of org ЄДРПОУ"
+ * → returns ЮО-level access_token with org context.
+ *
+ * Returns null on failure so caller can fall back to ФО OAuth.
  */
 export async function loginWithKepAsYuo(
   kepDecrypted: string,
   password: string,
+  edrpou: string,
 ): Promise<DpsSession | null> {
-  const edrpou = await getStampCertTaxId(kepDecrypted, password)
-  if (!edrpou) return null
+  // Director signs their own РНОКПП (cert's serialNumber)
+  const rnokpp = await getCertTaxId(kepDecrypted, password)
 
-  const username = `${edrpou}-${edrpou}-${Date.now()}`
+  // Username format for ЮО: {РНОКПП}-{ЄДРПОУ}-{timestamp}
+  // DPS Spring Security interprets this as director in org context
+  const username = `${rnokpp}-${edrpou}-${Date.now()}`
   let signature: string
   try {
-    signature = await signWithStampKey(kepDecrypted, password, edrpou)
+    signature = await signWithKepDecrypted(kepDecrypted, password, rnokpp)
   } catch (e) {
-    console.log('[dps-auth] loginWithKepAsYuo stamp sign failed:', e)
+    console.log('[dps-auth] loginWithKepAsYuo sign failed:', e)
     return null
   }
 
   const qs = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`
   const url = `${DPS_OAUTH_URL}?${qs}`
-  console.log('[dps-auth] YUO OAuth POST | edrpou:', edrpou, '| sigLen:', signature.length)
+  console.log('[dps-auth] YUO OAuth POST | rnokpp:', rnokpp, '| edrpou:', edrpou, '| sigLen:', signature.length)
 
   const res = await fetch(url, {
     method: 'POST',
@@ -82,6 +92,7 @@ export async function loginWithKepAsYuo(
     taxIdUsed: edrpou,
   }
 }
+
 
 /**
  * Authenticate to DPS Cabinet via KEP signature.

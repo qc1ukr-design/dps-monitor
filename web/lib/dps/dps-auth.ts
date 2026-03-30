@@ -18,7 +18,7 @@
  * ALL taxpayers share the same client credential; the per-user identity
  * is established via the KEP signature in the password field.
  */
-import { signWithKepDecrypted } from './signer'
+import { signWithKepDecrypted, getCertTaxId } from './signer'
 
 const DPS_OAUTH_URL = 'https://cabinet.tax.gov.ua/ws/auth/oauth/token'
 
@@ -37,15 +37,23 @@ export interface DpsSession {
 /**
  * Authenticate to DPS Cabinet via KEP signature.
  *
+ * DPS OAuth validates that the signed taxId matches the certificate's serialNumber.
+ * For ЮО director certs the stored kep_tax_id may be ЄДРПОУ (8 digits) — OAuth
+ * would reject it with "Не вірний податковий номер". We therefore ALWAYS extract
+ * the taxId from the cert itself, ignoring the _taxIdHint parameter.
+ *
  * @param kepDecrypted - decrypted KEP value from DB (raw pfxBase64 or v2 JSON)
  * @param password     - KEP password (decrypted)
- * @param taxId        - РНОКПП / ЄДРПОУ of the taxpayer
+ * @param _taxIdHint   - kept for API compat, actual taxId always taken from cert
  */
 export async function loginWithKep(
   kepDecrypted: string,
   password: string,
-  taxId: string
+  _taxIdHint: string  // eslint-disable-line @typescript-eslint/no-unused-vars
 ): Promise<DpsSession> {
+  // Always use the cert's own taxId (РНОКПП) — OAuth rejects any mismatch
+  const taxId = await getCertTaxId(kepDecrypted, password)
+
   // Username format: taxId-taxId-timestamp (milliseconds)
   const username = `${taxId}-${taxId}-${Date.now()}`
   // Sign the plain taxId string (not the username)
@@ -54,7 +62,7 @@ export async function loginWithKep(
   // Params go in query string — Spring Security reads them from QS + body
   const qs = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`
   const url = `${DPS_OAUTH_URL}?${qs}`
-  console.log('[dps-auth] POST', DPS_OAUTH_URL, '| taxId:', taxId, '| username:', username, '| sigLen:', signature.length)
+  console.log('[dps-auth] POST', DPS_OAUTH_URL, '| certTaxId:', taxId, '| username:', username, '| sigLen:', signature.length)
 
   const res = await fetch(url, {
     method: 'POST',

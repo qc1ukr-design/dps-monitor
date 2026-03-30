@@ -37,10 +37,10 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
   const { data: { user }, error: authError } = await supabase.auth.getUser()
   if (authError || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Verify client belongs to this user (fetch name for alerts)
+  // Verify client belongs to this user (fetch name + edrpou for alerts + ЮО auth)
   const { data: client } = await supabase
     .from('clients')
-    .select('id, name')
+    .select('id, name, edrpou')
     .eq('id', id)
     .eq('user_id', user.id)
     .single()
@@ -68,16 +68,27 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: 'Failed to decrypt KEP', detail: String(e) }, { status: 500 })
   }
 
-  const taxId = tokenRow.kep_tax_id?.trim() ?? ''
-  if (!taxId) {
+  const kepTaxId = tokenRow.kep_tax_id?.trim() ?? ''
+  if (!kepTaxId) {
     return NextResponse.json({ error: 'KEP tax ID not stored — re-upload KEP' }, { status: 400 })
   }
+
+  // For ЮО (legal entity): clients.edrpou is the 8-digit ЄДРПОУ.
+  // The director's personal cert has РНОКПП (10 digits) as kep_tax_id,
+  // but DPS requires signing the organisation's ЄДРПОУ with the director's key.
+  // For ФОП / physical persons, edrpou equals the РНОКПП (or is absent) → use kep_tax_id.
+  const edrpou = client.edrpou?.trim() ?? ''
+  const taxId = (edrpou && /^\d{8}$/.test(edrpou)) ? edrpou : kepTaxId
+
+  console.log(`[sync] client=${id} kepTaxId=${kepTaxId} edrpou=${edrpou} → signing with=${taxId}`)
 
   // Sign
   let authHeader: string
   try {
     authHeader = await signWithKepDecrypted(kepDecrypted, password, taxId)
+    console.log(`[sync] client=${id} signing OK`)
   } catch (e) {
+    console.error(`[sync] client=${id} signing FAILED:`, e)
     return NextResponse.json({ error: 'Signing failed', detail: String(e) }, { status: 500 })
   }
 
@@ -104,6 +115,8 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
   let newProfile: unknown = null
   let newBudget:  unknown = null
 
+  console.log(`[sync] client=${id} profile=${profileResult.status} budget=${budgetResult.status}`)
+
   // Upsert profile cache
   if (profileResult.ok && profileResult.body) {
     newProfile = normalizeProfile(profileResult.body)
@@ -125,9 +138,14 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
         is_mock: false,
       }, { onConflict: 'client_id,data_type' }),
     ])
-    results.profile = { ok: true, error: error?.message ?? rawError?.message }
+    results.profile = { ok: true, dbError: error?.message ?? rawError?.message ?? null }
   } else {
-    results.profile = { ok: false, status: profileResult.status, body: profileResult.body }
+    // DPS returned an error — include truncated body for diagnosis
+    const bodyPreview = profileResult.body
+      ? JSON.stringify(profileResult.body).slice(0, 300)
+      : null
+    results.profile = { ok: false, status: profileResult.status, body: bodyPreview }
+    console.error(`[sync] client=${id} profile DPS error ${profileResult.status}:`, bodyPreview)
   }
 
   // Upsert budget cache
@@ -143,9 +161,12 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
         fetched_at: now,
         is_mock: false,
       }, { onConflict: 'client_id,data_type' })
-    results.budget = { ok: true, error: error?.message }
+    results.budget = { ok: true, dbError: error?.message ?? null }
   } else {
-    results.budget = { ok: false, status: budgetResult.status, body: budgetResult.body }
+    const bodyPreview = budgetResult.body
+      ? JSON.stringify(budgetResult.body).slice(0, 300)
+      : null
+    results.budget = { ok: false, status: budgetResult.status, body: bodyPreview }
   }
 
   // ── Alert detection (only when we have prior data to compare) ─────────────

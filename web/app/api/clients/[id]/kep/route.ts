@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { encrypt } from '@/lib/crypto'
-import { inspectKep, inspectKepFiles, CERT_EXTS } from '@/lib/dps/signer'
+import { inspectKepWithCert, inspectKepFiles, CERT_EXTS } from '@/lib/dps/signer'
 
 interface RouteParams {
   params: Promise<{ id: string }>
@@ -73,20 +73,38 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       )
     }
 
-    try {
-      kepInfo = await inspectKepFiles(keyBuffers, certBuffers, password)
-    } catch (e) {
-      return NextResponse.json({
-        error: 'Невірний файл KEP або неправильний пароль',
-        detail: String(e),
-      }, { status: 400 })
+    if (certBuffers.length > 0 || keyBuffers.length > 1) {
+      // Multiple files: key+cert pair OR director key + seal key (ЮО scenario)
+      // inspectKepFiles detects ЮО and returns ЄДРПОУ as taxId automatically
+      try {
+        kepInfo = await inspectKepFiles(keyBuffers, certBuffers, password)
+      } catch (e) {
+        return NextResponse.json({
+          error: 'Невірний файл KEP або неправильний пароль',
+          detail: String(e),
+        }, { status: 400 })
+      }
+      kepStorageValue = JSON.stringify({ v: 2, files })
+    } else {
+      // Single key file — extract + cache cert to avoid CMP at sync time
+      let extractedCertBase64: string | null = null
+      try {
+        const result = await inspectKepWithCert(keyBuffers[0], password)
+        kepInfo = result.info
+        extractedCertBase64 = result.certBuffer ? result.certBuffer.toString('base64') : null
+      } catch (e) {
+        return NextResponse.json({
+          error: 'Невірний файл KEP або неправильний пароль',
+          detail: String(e),
+        }, { status: 400 })
+      }
+      kepStorageValue = extractedCertBase64
+        ? JSON.stringify({ v: 2, files: [files[0], { name: '_cert.cer', base64: extractedCertBase64 }] })
+        : JSON.stringify({ v: 2, files })
     }
 
-    // Store as v2 JSON so sync route can reconstruct key + cert buffers
-    kepStorageValue = JSON.stringify({ v: 2, files })
-
   } else if (pfxBase64) {
-    // ── Legacy single-file mode ────────────────────────────────────────────
+    // ── Legacy single-file mode (API compat) ──────────────────────────────
     let pfxBuffer: Buffer
     try {
       pfxBuffer = Buffer.from(pfxBase64, 'base64')
@@ -94,8 +112,11 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'Invalid pfxBase64' }, { status: 400 })
     }
 
+    let extractedCertBase64: string | null = null
     try {
-      kepInfo = await inspectKep(pfxBuffer, password)
+      const result = await inspectKepWithCert(pfxBuffer, password)
+      kepInfo = result.info
+      extractedCertBase64 = result.certBuffer ? result.certBuffer.toString('base64') : null
     } catch (e) {
       return NextResponse.json({
         error: 'Невірний файл KEP або неправильний пароль',
@@ -103,7 +124,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }, { status: 400 })
     }
 
-    kepStorageValue = pfxBase64
+    // Embed extracted cert in v2 format if available, otherwise legacy base64
+    kepStorageValue = extractedCertBase64
+      ? JSON.stringify({ v: 2, files: [{ name: '_key.pfx', base64: pfxBase64 }, { name: '_cert.cer', base64: extractedCertBase64 }] })
+      : pfxBase64
 
   } else {
     return NextResponse.json(
@@ -169,6 +193,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
     configured: true,
     caName: data.kep_ca_name,
     ownerName: data.kep_owner_name,
+    orgName: '',   // populated only right after upload (not persisted yet)
     validTo: data.kep_valid_to,
     taxId: data.kep_tax_id,
     updatedAt: data.updated_at,

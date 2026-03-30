@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { normalizeBudget } from '@/lib/dps/normalizer'
 import type { BudgetCalculations } from '@/lib/dps/types'
 import SyncAllButton from './sync-all-button'
+import ExcelExportButton from './excel-export-button'
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -335,7 +336,7 @@ export default async function DashboardPage() {
         <div>
           <h2 className="text-lg font-semibold text-gray-900 mb-3">Модулі</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {modules.map((m) => {
+            {modules.filter(m => !m.download).map((m) => {
               const inner = (
                 <>
                   <div className="text-2xl mb-3">{m.icon}</div>
@@ -355,15 +356,14 @@ export default async function DashboardPage() {
                   ? 'border-blue-200 hover:shadow-md cursor-pointer'
                   : 'border-gray-200 opacity-60'
               }`
-              if (m.active && m.href && m.download) {
-                return <a key={m.title} href={m.href} download className={cls}>{inner}</a>
-              }
               return m.active && m.href ? (
                 <Link key={m.title} href={m.href} className={cls}>{inner}</Link>
               ) : (
                 <div key={m.title} className={cls}>{inner}</div>
               )
             })}
+            {/* Excel export — client component with loading state */}
+            {hasClients && <ExcelExportButton />}
           </div>
         </div>
 

@@ -22,59 +22,55 @@ const AdmZip = require('adm-zip') as new (buf: Buffer) => {
 }
 /* eslint-enable @typescript-eslint/no-require-imports */
 
-/**
- * Patch jkurwa's SigningCertificateV2 to use SHA-256 (RFC 5035 default) instead of
- * GOST-34311. The DPS OAuth server's Spring Security auth provider uses standard
- * CAdES-BES parsing (sha256-based cert refs), while the public_api endpoint
- * ignores signingCertificateV2 entirely. Without this patch, OAuth returns HTTP 500
- * because the server crashes trying to interpret a non-standard GOST cert hash.
- */
-try {
-  /* eslint-disable @typescript-eslint/no-require-imports */
-  const { createHash } = require('crypto') as typeof import('crypto')
-  const rfc3280 = require('jkurwa/lib/spec/rfc3280') as { Certificate: { encode: (obj: unknown, enc: string) => Buffer } }
-  const certidSpec = require('jkurwa/lib/spec/rfc5035-certid') as {
-    SigningCertificateV2: { wrap: (cert: unknown, hash: Buffer) => Buffer }
-  }
-  /* eslint-enable @typescript-eslint/no-require-imports */
+// Monkey-patch: replace GOST-34311 cert hash in signingCertificateV2 with SHA-256.
+// DPS OAuth server (Java/Spring) lacks GOST-34311 JCA provider → NPE → 500.
+// SHA-256 is a standard JCA algorithm and works with any JVM.
+// Must run at module load time before any signing occurs.
+;(function patchSigningCertificateV2() {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const certidSpec = require('jkurwa/lib/spec/rfc5035-certid') as {
+      SigningCertificateV2: { wrap: (cert: unknown, hash: Buffer) => Buffer; encode: (val: unknown, enc: string) => Buffer }
+    }
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const rfc3280 = require('jkurwa/lib/spec/rfc3280') as {
+      Certificate: { encode: (cert: unknown, enc: string) => Buffer }
+    }
+    const { createHash } = require('crypto') as typeof import('crypto') // eslint-disable-line @typescript-eslint/no-require-imports
 
-  // Replace GOST-34311 cert hash with SHA-256 in signingCertificateV2.
-  // Build the ASN.1 DER manually to avoid asn1.js OID registry issues:
-  //
-  //   SigningCertificateV2 ::= SEQUENCE {
-  //     certs SEQUENCE OF ESSCertIDv2
-  //   }
-  //   ESSCertIDv2 ::= SEQUENCE {
-  //     hashAlgorithm AlgorithmIdentifier DEFAULT { algorithm id-sha256 }, ← omitted = defaults to SHA-256
-  //     certHash OCTET STRING
-  //   }
-  //
-  // RFC 5035: omitting hashAlgorithm means SHA-256 is assumed — Spring BouncyCastle handles this correctly.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  certidSpec.SigningCertificateV2.wrap = function(cert: unknown, _hash: Buffer): Buffer {
-    const certDer = rfc3280.Certificate.encode(cert, 'der')
-    const sha256Hash = createHash('sha256').update(certDer).digest()
-    //  04 20 <32 bytes>          → OCTET STRING (certHash)
-    //  30 22 <above>             → ESSCertIDv2 SEQUENCE
-    //  30 24 <above>             → certs SEQUENCE OF
-    //  30 26 <above>             → SigningCertificateV2 SEQUENCE
-    const certHashDer = Buffer.concat([Buffer.from([0x04, 0x20]), sha256Hash])
-    const essCertIdDer = Buffer.concat([Buffer.from([0x30, certHashDer.length]), certHashDer])
-    const certsDer = Buffer.concat([Buffer.from([0x30, essCertIdDer.length]), essCertIdDer])
-    return Buffer.concat([Buffer.from([0x30, certsDer.length]), certsDer])
+    certidSpec.SigningCertificateV2.wrap = function(cert: unknown): Buffer {
+      const certDer = rfc3280.Certificate.encode(cert, 'der')
+      const sha256Hash = createHash('sha256').update(certDer).digest()
+      // SHA-256 OID as integer array — asn1.js encodes this correctly
+      // OID 2.16.840.1.101.3.4.2.1
+      const SHA256_OID = [2, 16, 840, 1, 101, 3, 4, 2, 1]
+      const c = cert as { tbsCertificate: { issuer: unknown; serialNumber: unknown } }
+      return certidSpec.SigningCertificateV2.encode({
+        certs: [{
+          hashAlgorithm: { algorithm: SHA256_OID },
+          certHash: sha256Hash,
+          issuerSerial: {
+            issuer: [{ type: 'directoryName', value: c.tbsCertificate.issuer }],
+            serialNumber: c.tbsCertificate.serialNumber,
+          },
+        }],
+      }, 'der')
+    }
+    console.log('[signer] signingCertificateV2 → SHA-256 patch applied')
+  } catch (e) {
+    console.warn('[signer] signingCertificateV2 patch failed:', e)
   }
-  console.log('[signer] signingCertificateV2 SHA-256 patch applied')
-} catch (e) {
-  console.warn('[signer] signingCertificateV2 patch FAILED:', e)
-}
+})()
+
 
 export interface KepInfo {
   caName: string
-  ownerName: string
+  ownerName: string   // person's full name (director for ЮО certs)
+  orgName: string     // organisation name from cert (empty for personal/ФОП certs)
   serial: string
   validFrom: string
   validTo: string
-  taxId: string
+  taxId: string       // ЄДРПОУ (8 digits) for ЮО certs; РНОКПП (10 digits) for personal
 }
 
 // File extension classification
@@ -550,13 +546,13 @@ function extractCertInfo(cert: InstanceType<typeof jk.Certificate>): KepInfo {
     .replace(/^(УНЗР|РНОКПП|ЄДРПОУ|TINUA-)/i, '')
     .trim()
 
+  const personName = [subj.givenName, subj.surname].filter(Boolean).join(' ')
+  const orgFromCert = subj.organizationName ?? ''
+
   return {
     caName: issuer.organizationName ?? issuer.commonName ?? 'Невідомий АЦСК',
-    ownerName:
-      [subj.givenName, subj.surname].filter(Boolean).join(' ') ||
-      subj.commonName ||
-      subj.organizationName ||
-      'Невідомо',
+    ownerName: personName || subj.commonName || orgFromCert || 'Невідомо',
+    orgName: orgFromCert,
     serial: (cert.serial as Buffer | undefined)?.toString('hex') ?? '',
     validFrom: parseCertDate(validity?.notBefore),
     validTo: parseCertDate(validity?.notAfter),
@@ -565,6 +561,29 @@ function extractCertInfo(cert: InstanceType<typeof jk.Certificate>): KepInfo {
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
+
+/**
+ * Scan all certificates loaded into a Box and return the first 8-digit ЄДРПОУ found.
+ * Used in ЮО scenario where director's signing cert has РНОКПП (10 digits)
+ * but the seal cert (also loaded) has ЄДРПОУ (8 digits).
+ * DPS requires signing the ЄДРПОУ data with the director's cert for ЮО auth.
+ */
+function extractOrgTaxId(box: InstanceType<typeof jk.Box>): string | null {
+  type BoxInternal = { keys: Array<{ priv: unknown; cert: unknown }>; certs: unknown[] }
+  const b = box as unknown as BoxInternal
+  const allCertObjs = [
+    ...(b.certs ?? []),
+    ...(b.keys ?? []).map(k => k.cert).filter(Boolean),
+  ]
+  for (const certObj of allCertObjs) {
+    if (!certObj) continue
+    try {
+      const info = extractCertInfo(certObj as InstanceType<typeof jk.Certificate>)
+      if (/^\d{8}$/.test(info.taxId)) return info.taxId  // 8 digits = ЄДРПОУ
+    } catch { /* skip invalid cert */ }
+  }
+  return null
+}
 
 /**
  * Parse a single KEP file buffer and return info about the signing certificate.
@@ -576,8 +595,35 @@ export async function inspectKep(pfxBuffer: Buffer, password: string): Promise<K
 }
 
 /**
+ * Like inspectKep but also returns the certificate DER buffer.
+ * Used by upload routes to cache the cert alongside the key,
+ * so sync never needs to fetch it from CMP servers (which may be
+ * unreachable from Vercel's US/EU infrastructure).
+ */
+export async function inspectKepWithCert(
+  pfxBuffer: Buffer,
+  password: string
+): Promise<{ info: KepInfo; certBuffer: Buffer | null }> {
+  const box = await loadBox(pfxBuffer, password)
+  const keyInfo = getSigningKey(box)
+  const info = extractCertInfo(keyInfo.cert)
+  let certBuffer: Buffer | null = null
+  try {
+    certBuffer = (keyInfo.cert as unknown as { as_asn1: () => Buffer }).as_asn1()
+  } catch { /* cert serialization failed — CMP will be used at sign time */ }
+  return { info, certBuffer }
+}
+
+/**
  * Parse multiple KEP file buffers (key files + cert files separately) and return cert info.
- * Use when the user uploads .dat + .cer / .crt files together.
+ * Use when the user uploads .dat + .cer / .crt files together, or two key files (ЮО scenario).
+ *
+ * ЮО (legal entity) scenario — director key + seal key uploaded together:
+ *   - jkurwa classifies director cert as 'sign' (digitalSignature), seal as 'stamp'
+ *   - getSigningKey() returns the director cert (РНОКПП, 10 digits)
+ *   - extractOrgTaxId() finds the seal cert ЄДРПОУ (8 digits) in the same box
+ *   - We return taxId = ЄДРПОУ so DPS `payer_card` returns ЮО data
+ *   - box.sign(ЄДРПОУ) uses director's key automatically (correct for DPS ЮО auth)
  */
 export async function inspectKepFiles(
   keyBuffers: Buffer[],
@@ -586,7 +632,33 @@ export async function inspectKepFiles(
 ): Promise<KepInfo> {
   const box = await loadBoxFromFiles(keyBuffers, certBuffers, password)
   const keyInfo = getSigningKey(box)
-  return extractCertInfo(keyInfo.cert)
+  const info = extractCertInfo(keyInfo.cert)
+
+  // ЮО detection: signing cert has РНОКПП (10 digits) but another loaded cert has ЄДРПОУ (8 digits)
+  // In this case override taxId with ЄДРПОУ so DPS auth returns ЮО data
+  if (/^\d{10}$/.test(info.taxId)) {
+    const orgTaxId = extractOrgTaxId(box)
+    if (orgTaxId) {
+      console.log(`[signer] ЮО detected: signing cert РНОКПП=${info.taxId}, org ЄДРПОУ=${orgTaxId}`)
+      // orgName may already be in info from the signing cert; if not, we don't have it here
+      return { ...info, taxId: orgTaxId }
+    }
+  }
+
+  return info
+}
+
+/**
+ * Extract the taxId (РНОКПП or ЄДРПОУ) directly from the signing certificate.
+ *
+ * For ЮО director certs the stored kep_tax_id may have been overridden to ЄДРПОУ
+ * (so that public_api sync works), but DPS OAuth requires the cert's own РНОКПП.
+ * This function always returns the cert's actual serialNumber-based taxId.
+ */
+export async function getCertTaxId(kepDecrypted: string, password: string): Promise<string> {
+  const box = await loadBoxFromDecrypted(kepDecrypted, password)
+  const keyInfo = getSigningKey(box)
+  return extractCertInfo(keyInfo.cert).taxId
 }
 
 /**

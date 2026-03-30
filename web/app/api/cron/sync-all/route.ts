@@ -12,8 +12,10 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { decrypt } from '@/lib/crypto'
 import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
-import { detectAlerts } from '@/lib/dps/alerts'
+import { detectAlerts, detectDocumentAlerts, alertIcon } from '@/lib/dps/alerts'
+import type { RawDpsDoc } from '@/lib/dps/alerts'
 import { sendAlertEmail } from '@/lib/email'
+import { sendTelegramMessage } from '@/lib/telegram'
 
 const DPS_BASE = 'https://cabinet.tax.gov.ua/ws/public_api'
 
@@ -66,14 +68,28 @@ export async function GET(request: NextRequest) {
     .in('id', clientIds)
   const clientMap = new Map(clients?.map(c => [c.id, c.name]) ?? [])
 
-  // ── User email lookup (for notifications) ────────────────────────────────
+  // ── User email + Telegram lookup (for notifications) ─────────────────────
   const uniqueUserIds = Array.from(new Set(tokens.map(t => t.user_id)))
   const userEmailMap = new Map<string, string>()
+  const userTelegramMap = new Map<string, string>() // user_id → chat_id
+
   for (const uid of uniqueUserIds) {
     try {
       const { data: { user } } = await supabase.auth.admin.getUserById(uid)
       if (user?.email) userEmailMap.set(uid, user.email)
     } catch { /* skip */ }
+  }
+
+  // Fetch Telegram chat IDs for users who opted in
+  const { data: settings } = await supabase
+    .from('user_settings')
+    .select('user_id, telegram_chat_id')
+    .in('user_id', uniqueUserIds)
+    .eq('notify_telegram', true)
+    .not('telegram_chat_id', 'is', null)
+
+  for (const s of settings ?? []) {
+    if (s.telegram_chat_id) userTelegramMap.set(s.user_id, s.telegram_chat_id)
   }
 
   // ── Process each client ───────────────────────────────────────────────────
@@ -91,21 +107,23 @@ export async function GET(request: NextRequest) {
       // Sign
       const auth = await signWithKepDecrypted(kepDecrypted, password, taxId)
 
-      // Read OLD normalized data before overwriting
+      // Read OLD cached data before overwriting
       const { data: oldCache } = await supabase
         .from('dps_cache')
         .select('data_type, data')
         .eq('client_id', clientId)
-        .in('data_type', ['profile', 'budget'])
+        .in('data_type', ['profile', 'budget', 'documents'])
 
-      const oldProfile = oldCache?.find(r => r.data_type === 'profile')?.data ?? null
-      const oldBudget = oldCache?.find(r => r.data_type === 'budget')?.data ?? null
+      const oldProfile  = oldCache?.find(r => r.data_type === 'profile')?.data ?? null
+      const oldBudget   = oldCache?.find(r => r.data_type === 'budget')?.data ?? null
+      const oldDocCache = oldCache?.find(r => r.data_type === 'documents')?.data as { ids?: string[] } | null
 
       // Fetch fresh data from DPS
       const year = new Date().getFullYear()
-      const [profileResult, budgetResult] = await Promise.all([
+      const [profileResult, budgetResult, docsResult] = await Promise.all([
         dpsFetch('payer_card', auth),
         dpsFetch(`ta/splatp?year=${year}`, auth),
+        dpsFetch('post/incoming?page=0&size=50', auth),
       ])
 
       const now = new Date().toISOString()
@@ -128,6 +146,53 @@ export async function GET(request: NextRequest) {
           data_type: 'budget', data: newBudget,
           fetched_at: now, is_mock: false,
         }, { onConflict: 'client_id,data_type' })
+      }
+
+      // ── Documents: detect new arrivals ───────────────────────────────────
+      let docAlerts = 0
+      if (docsResult.ok && docsResult.body) {
+        const body = docsResult.body as Record<string, unknown>
+        const rawDocs: RawDpsDoc[] = Array.isArray(body.content)
+          ? (body.content as RawDpsDoc[])
+          : Array.isArray(body) ? (body as RawDpsDoc[]) : []
+
+        if (rawDocs.length > 0) {
+          const cachedIds = new Set<string>(oldDocCache?.ids ?? [])
+          const freshIds  = rawDocs.map(d => String(d.id))
+
+          // Only alert when we have a prior cache (first run = just seed, no alerts)
+          if (cachedIds.size > 0) {
+            const newDocAlerts = detectDocumentAlerts(rawDocs, cachedIds, clientName)
+            if (newDocAlerts.length > 0) {
+              await supabase.from('alerts').insert(
+                newDocAlerts.map(a => ({
+                  user_id: userId,
+                  client_id: clientId,
+                  type: a.type,
+                  message: a.message,
+                  data: a.data ?? null,
+                  is_read: false,
+                }))
+              )
+              docAlerts = newDocAlerts.length
+              alertsCreated += docAlerts
+
+              // Telegram
+              const tgChatId = userTelegramMap.get(userId)
+              if (tgChatId) {
+                const lines = newDocAlerts.map(a => `${alertIcon(a.type)} ${a.message}`).join('\n')
+                await sendTelegramMessage(tgChatId, `<b>ДПС-Монітор</b>\n\n${lines}`)
+              }
+            }
+          }
+
+          // Update document IDs cache
+          await supabase.from('dps_cache').upsert({
+            client_id: clientId, user_id: userId,
+            data_type: 'documents', data: { ids: freshIds },
+            fetched_at: now, is_mock: false,
+          }, { onConflict: 'client_id,data_type' })
+        }
       }
 
       // Detect alerts (only when we have prior data to compare with)
@@ -157,10 +222,17 @@ export async function GET(request: NextRequest) {
               alerts: detected.map(a => ({ message: a.message })),
             }).catch(() => { /* ignore */ })
           }
+
+          // Telegram notification
+          const tgChatId = userTelegramMap.get(userId)
+          if (tgChatId) {
+            const lines = detected.map(a => `${alertIcon(a.type)} ${a.message}`).join('\n')
+            await sendTelegramMessage(tgChatId, `<b>ДПС-Монітор</b>\n\n${lines}`)
+          }
         }
       }
 
-      clientResults[clientId] = { ok: true, alerts: clientAlerts }
+      clientResults[clientId] = { ok: true, alerts: clientAlerts + docAlerts }
       synced++
     } catch (e) {
       clientResults[clientId] = { ok: false, error: String(e) }

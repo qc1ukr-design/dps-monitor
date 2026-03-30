@@ -271,7 +271,17 @@ function _mapReportStatus(code: unknown, text: unknown): TaxReport['status'] {
   if (s.includes('прийнят') || s === '1' || s === 'accepted') return 'accepted'
   if (s.includes('відхилен') || s === '2' || s === 'rejected') return 'rejected'
   if (s.includes('обробк') || s === '3' || s === 'processing') return 'processing'
+  // flagName from regdoc/list: "дозволено тільки перегляд, отриманий по E-Mail" = accepted (view-only mode)
+  if (s.includes('перегляд') || s.includes('e-mail') || s.includes('e mail')) return 'accepted'
   return 'pending'
+}
+
+function _cleanFlagName(flagName: string): string {
+  // "дозволено тільки перегляд,\n отриманий по E-Mail" → "Прийнято"
+  if (!flagName) return ''
+  const f = flagName.toLowerCase()
+  if (f.includes('перегляд') || f.includes('e-mail')) return ''
+  return flagName.trim()
 }
 
 export function normalizeReports(raw: unknown): ReportsList {
@@ -303,15 +313,15 @@ function _mapReportRows(arr: Record<string, unknown>[]): TaxReport[] {
       row.statusName ?? row.status_name ?? row.STATUS_NAME ?? row.status ?? row.STATUS ?? ''
     )
     return {
-      // ws/api/regdoc/list fields: id, dname, formCode, dperiod, dget, statusName, dnum
-      id: str(row.id ?? row.docId ?? row.ID ?? String(idx)),
-      name: str(row.dname ?? row.name ?? row.docName ?? row.DOC_NAME ?? row.zvit_name ?? row.ZVIT_NAME ?? ''),
-      formCode: str(row.formCode ?? row.form_code ?? row.FORM_CODE ?? row.kod_formy ?? row.KOD_FORMY ?? ''),
-      period: str(row.dperiod ?? row.period ?? row.zvit_period ?? row.ZVIT_PERIOD ?? row.periodName ?? row.PERIOD_NAME ?? ''),
-      submittedAt: str(row.dget ?? row.submittedAt ?? row.date_sub ?? row.DATE_SUB ?? row.docDate ?? row.DOC_DATE ?? ''),
-      status: _mapReportStatus(row.statusCode ?? row.STATUS_CODE, statusText),
-      statusText: statusText || 'Невідомо',
-      regNumber: str(row.dnum ?? row.regNumber ?? row.reg_num ?? row.REG_NUM ?? row.docNumber ?? row.DOC_NUMBER ?? ''),
+      // ws/api/regdoc/list actual fields: codRegdoc, doc, cdocSub, docName, dget, nreg, periodYear, periodMonth, flags, flagName
+      id: str(row.codRegdoc ?? row.id ?? row.docId ?? row.ID ?? String(idx)),
+      name: str(row.docName ?? row.dname ?? row.name ?? row.DOC_NAME ?? row.zvit_name ?? ''),
+      formCode: str(row.doc ?? row.formCode ?? row.form_code ?? row.FORM_CODE ?? row.kod_formy ?? ''),
+      period: str(row.dperiod ?? row.period ?? row.periodName ?? row.PERIOD_NAME ?? ''),
+      submittedAt: str(row.dget ?? row.submittedAt ?? row.date_sub ?? row.docDate ?? ''),
+      status: _mapReportStatus(row.statusCode ?? row.STATUS_CODE, statusText || str(row.flagName ?? '')),
+      statusText: statusText || _cleanFlagName(str(row.flagName ?? '')) || '',
+      regNumber: str(row.nreg ?? row.dnum ?? row.regNumber ?? row.reg_num ?? row.docNumber ?? ''),
     }
   })
 }

@@ -8,6 +8,7 @@ interface KepStatus {
   configured: boolean
   caName?: string
   ownerName?: string
+  orgName?: string
   validTo?: string
   taxId?: string
 }
@@ -164,9 +165,14 @@ export default function ClientSettingsPage() {
               <span className="font-semibold text-green-800">Ключ успішно завантажено!</span>
             </div>
             <div className="text-sm text-green-700 space-y-0.5">
-              {kepUploadedInfo.ownerName && <div>Власник: <span className="font-medium">{kepUploadedInfo.ownerName}</span></div>}
+              {kepUploadedInfo.ownerName && (
+                <div>
+                  Підписант: <span className="font-medium">{kepUploadedInfo.ownerName}</span>
+                  {kepUploadedInfo.orgName && <span className="text-green-600"> · {kepUploadedInfo.orgName}</span>}
+                </div>
+              )}
               {kepUploadedInfo.caName && <div>АЦСК: {kepUploadedInfo.caName}</div>}
-              {kepUploadedInfo.taxId && <div>Податковий номер: {kepUploadedInfo.taxId}</div>}
+              {kepUploadedInfo.taxId && <div>Ідентифікатор: {kepUploadedInfo.taxId}</div>}
               {kepUploadedInfo.validTo && (
                 <div>Дійсний до: {new Date(kepUploadedInfo.validTo).toLocaleDateString('uk-UA', { timeZone: 'Europe/Kiev' })}</div>
               )}
@@ -192,7 +198,12 @@ export default function ClientSettingsPage() {
         {kepStatus?.configured && !kepUploadedInfo && !showReplaceForm && (
           <div className="bg-blue-50 rounded-lg px-4 py-3 text-sm space-y-1">
             <div className="font-medium text-blue-800">КЕП підключено</div>
-            {kepStatus.ownerName && <div className="text-blue-700">Власник: {kepStatus.ownerName}</div>}
+            {kepStatus.ownerName && (
+              <div className="text-blue-700">
+                Підписант: {kepStatus.ownerName}
+                {kepStatus.orgName && <span className="text-blue-600"> · {kepStatus.orgName}</span>}
+              </div>
+            )}
             {kepStatus.caName && <div className="text-blue-600">АЦСК: {kepStatus.caName}</div>}
             {kepStatus.taxId && <div className="text-blue-600">Податковий номер: {kepStatus.taxId}</div>}
             {kepStatus.validTo && (
@@ -240,6 +251,9 @@ export default function ClientSettingsPage() {
               <p className="text-xs text-gray-400 mt-1">
                 Підтримується: .pfx, .p12, .dat, .ZS2, .ZS3, ZIP-архів.
                 Якщо ключ та сертифікат у різних файлах — оберіть їх одночасно.
+              </p>
+              <p className="text-xs text-amber-600 mt-1">
+                <strong>Для ЮО:</strong> оберіть одночасно <em>ключ директора</em> і <em>ключ-печатку</em> підприємства — система автоматично визначить правильний підписант.
               </p>
               {selectedFiles.length > 1 && (
                 <div className="mt-1.5 flex flex-wrap gap-1">
@@ -333,10 +347,10 @@ export default function ClientSettingsPage() {
           <p className="font-medium text-gray-700">Як отримати токен:</p>
           <ol className="list-decimal list-inside space-y-1">
             <li>Відкрийте <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer" className="underline text-blue-600 hover:text-blue-800">cabinet.tax.gov.ua</a> та увійдіть через КЕП</li>
-            <li>Натисніть F12 (DevTools) → вкладка <strong>Network</strong></li>
-            <li>Оновіть сторінку, знайдіть будь-який запит до <code className="bg-gray-200 px-1 rounded">ws/a/</code></li>
-            <li>У заголовках знайдіть <code className="bg-gray-200 px-1 rounded">Authorization: Bearer ...</code></li>
-            <li>Скопіюйте значення після <code className="bg-gray-200 px-1 rounded">Bearer </code> та вставте нижче</li>
+            <li>Перейдіть до розділу <strong>Налаштування</strong></li>
+            <li>Відкрийте підрозділ <strong>Відкриті дані</strong></li>
+            <li>Натисніть <strong>Згенерувати токен</strong> та скопіюйте його</li>
+            <li>Вставте токен у поле нижче</li>
           </ol>
         </div>
 
@@ -349,7 +363,7 @@ export default function ClientSettingsPage() {
               type="text"
               value={tokenValue}
               onChange={e => setTokenValue(e.target.value)}
-              placeholder="Вставте Bearer токен з DevTools"
+              placeholder="Вставте токен з розділу Відкриті дані"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
             />
           </div>

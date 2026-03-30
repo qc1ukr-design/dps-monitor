@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { encrypt } from '@/lib/crypto'
-import { inspectKepFiles, inspectKep, CERT_EXTS } from '@/lib/dps/signer'
+import { inspectKepFiles, inspectKepWithCert, CERT_EXTS } from '@/lib/dps/signer'
 
 function getExt(filename: string): string {
   const idx = filename.lastIndexOf('.')
@@ -55,12 +55,20 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // Parse KEP → get owner info
+  // Parse KEP → get owner info + extract cert buffer for storage
   let kepInfo
+  let extractedCertBase64: string | null = null
   try {
-    kepInfo = certBuffers.length > 0
-      ? await inspectKepFiles(keyBuffers, certBuffers, password)
-      : await inspectKep(keyBuffers[0], password)
+    if (certBuffers.length > 0 || keyBuffers.length > 1) {
+      // Multiple files: key+cert pair OR director key + seal key (ЮО scenario)
+      // inspectKepFiles detects ЮО and returns ЄДРПОУ as taxId automatically
+      kepInfo = await inspectKepFiles(keyBuffers, certBuffers, password)
+    } else {
+      // Single key file — extract cert DER for caching (avoids CMP at sync time)
+      const result = await inspectKepWithCert(keyBuffers[0], password)
+      kepInfo = result.info
+      extractedCertBase64 = result.certBuffer ? result.certBuffer.toString('base64') : null
+    }
   } catch (e) {
     return NextResponse.json({
       error: 'Невірний файл KEP або неправильний пароль',
@@ -68,7 +76,8 @@ export async function POST(request: NextRequest) {
     }, { status: 400 })
   }
 
-  const clientName = kepInfo.ownerName || 'Без імені'
+  // For ЮО: prefer organisation name from cert (orgName) over the director's personal name
+  const clientName = kepInfo.orgName || kepInfo.ownerName || 'Без імені'
   const edrpou = kepInfo.taxId || null
 
   // Create client
@@ -85,10 +94,21 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // Store encrypted KEP
-  const kepStorageValue = files.length === 1 && certBuffers.length === 0
-    ? files[0].base64                          // single self-contained file — legacy format
-    : JSON.stringify({ v: 2, files })          // multi-file format
+  // Build storage value:
+  // - Multiple files (ЮО director+seal or key+cert): store all in v2 format
+  // - Single file with extracted cert: embed cert in v2 format (avoids CMP at sync)
+  // - Single file, cert already in file: legacy base64 (jkurwa loads it directly)
+  let kepStorageValue: string
+  if (certBuffers.length > 0 || keyBuffers.length > 1) {
+    kepStorageValue = JSON.stringify({ v: 2, files })
+  } else if (extractedCertBase64) {
+    kepStorageValue = JSON.stringify({
+      v: 2,
+      files: [files[0], { name: '_cert.cer', base64: extractedCertBase64 }],
+    })
+  } else {
+    kepStorageValue = files[0].base64
+  }
 
   const kepEncrypted = encrypt(kepStorageValue)
   const kepPasswordEncrypted = encrypt(password)

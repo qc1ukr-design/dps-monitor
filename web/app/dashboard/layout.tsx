@@ -26,6 +26,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
           <Link href="/dashboard/clients" className="text-sm text-gray-500 hover:text-gray-800 transition">
             Контрагенти
           </Link>
+          <Link href="/dashboard/settings" className="text-sm text-gray-500 hover:text-gray-800 transition">
+            ⚙️ Налаштування
+          </Link>
         </div>
         <div className="flex items-center gap-4">
           {/* Alerts bell */}

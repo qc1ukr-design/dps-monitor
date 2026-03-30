@@ -14,24 +14,49 @@ export default function SyncButton({ clientId }: { clientId: string }) {
     setSynced(false)
     setLoading(true)
 
-    const res = await fetch(`/api/clients/${clientId}/sync`, { method: 'POST' })
-    const json = await res.json()
-    setLoading(false)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/sync`, { method: 'POST' })
 
-    if (!res.ok) {
-      setError(json.error || 'Помилка оновлення')
-      return
+      let json: Record<string, unknown> = {}
+      try {
+        json = await res.json()
+      } catch {
+        // Non-JSON response (e.g. Vercel 504 timeout)
+      }
+
+      setLoading(false)
+
+      if (!res.ok) {
+        const msg = (json.error as string) || `Помилка (HTTP ${res.status})`
+        const detail = (json.detail as string) || ''
+        setError(detail ? `${msg}\n${detail}` : msg)
+        return
+      }
+
+      // Check if DPS actually returned data (sync may return 200 OK but DPS auth failed)
+      type DpsResult = { ok: boolean; status?: number; body?: string; dbError?: string | null }
+      const results = json.results as { profile?: DpsResult; budget?: DpsResult } | undefined
+      const profileOk = results?.profile?.ok ?? true
+      const budgetOk  = results?.budget?.ok  ?? true
+
+      if (!profileOk && !budgetOk) {
+        const status = results?.profile?.status ?? results?.budget?.status ?? '?'
+        const body   = results?.profile?.body   ?? results?.budget?.body   ?? ''
+        setError(`ДПС повернула помилку (HTTP ${status}).\n${body}`)
+        return
+      }
+
+      setSynced(true)
+      setTimeout(() => setSynced(false), 4000)
+      router.refresh()
+    } catch (e) {
+      setLoading(false)
+      setError(`Мережева помилка: ${String(e)}`)
     }
-
-    setSynced(true)
-    setTimeout(() => setSynced(false), 4000)
-
-    // Refresh server component data
-    router.refresh()
   }
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex flex-col items-end gap-1 max-w-xs">
       <button
         onClick={handleSync}
         disabled={loading}
@@ -59,7 +84,11 @@ export default function SyncButton({ clientId }: { clientId: string }) {
       {synced && (
         <span className="text-xs text-green-600">Дані успішно синхронізовано</span>
       )}
-      {error && <span className="text-xs text-red-500">{error}</span>}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700 whitespace-pre-wrap text-right max-w-[280px]">
+          {error}
+        </div>
+      )}
     </div>
   )
 }

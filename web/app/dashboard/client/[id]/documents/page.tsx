@@ -16,7 +16,7 @@ const DPS_A      = 'https://cabinet.tax.gov.ua/ws/a'
 async function fetchDocuments(
   clientId: string,
   userId: string
-): Promise<DocumentsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean }> {
+): Promise<DocumentsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean; debugError?: string }> {
   const supabase = await createClient()
 
   const { data: tokenRow } = await supabase
@@ -34,6 +34,7 @@ async function fetchDocuments(
   }
 
   const opts = { Accept: 'application/json' }
+  let kepDebug = '', uuidDebug = ''
 
   // ── KEP: ws/public_api/post/incoming (direct KEP Bearer) ──────────────────
   if (hasKep) {
@@ -52,8 +53,10 @@ async function fetchDocuments(
         const raw = await res.json()
         return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
       }
-    } catch {
-      // fall through to UUID fallback
+      const body = await res.text().catch(() => '')
+      kepDebug = `kep→${res.status}${body ? ': ' + body.slice(0, 100) : ''}`
+    } catch (e) {
+      kepDebug = `kep→${String(e).slice(0, 100)}`
     }
   }
 
@@ -70,11 +73,15 @@ async function fetchDocuments(
         const raw = await res.json()
         return { ...normalizeDocuments(raw), hasToken: true, isMock: false, tokenExpired: false }
       }
-    } catch {
+      const body = await res.text().catch(() => '')
+      uuidDebug = `uuid→${res.status}${body ? ': ' + body.slice(0, 80) : ''}`
+    } catch (e) {
+      uuidDebug = `uuid→${String(e).slice(0, 80)}`
     }
   }
 
-  return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: false }
+  const debugError = [kepDebug, uuidDebug].filter(Boolean).join(' | ')
+  return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: false, debugError }
 }
 
 function statusBadge(status: IncomingDocument['status']) {
@@ -121,7 +128,7 @@ export default async function DocumentsPage({ params }: PageProps) {
 
   if (error || !client) notFound()
 
-  const { documents, total, hasToken, isMock, tokenExpired } = await fetchDocuments(id, user.id)
+  const { documents, total, hasToken, isMock, tokenExpired, debugError } = await fetchDocuments(id, user.id)
 
   return (
     <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">
@@ -190,6 +197,7 @@ export default async function DocumentsPage({ params }: PageProps) {
               cabinet.tax.gov.ua →
             </a>
           </p>
+          {debugError && <p className="mt-2 font-mono text-xs text-red-600 break-all">{debugError}</p>}
         </div>
       )}
 

@@ -6,11 +6,143 @@ export type AlertType =
   | 'debt_cleared'
   | 'overpayment_changed'
   | 'status_changed'
+  | 'new_document'
 
 export interface AlertPayload {
   type: AlertType
   message: string
   data?: Record<string, unknown>
+}
+
+// ── Raw DPS document (from ws/public_api/post/incoming) ──────────────────────
+export interface RawDpsDoc {
+  id: string | number
+  cdoc?: string
+  name?: string
+  text?: string | null
+  csti?: number
+  dateIn?: string
+}
+
+// ── Budget classification codes that are ROUTINE for ФОП on simplified tax ───
+// Per ALERT_POLICY.md §3.1 — update when adding ЮО or ФОП-загальник clients
+const ROUTINE_BUDGET_CODES = new Set(['71040000', '18050400', '11011700'])
+
+/**
+ * Returns true if a BOTB0501 message contains ONLY routine taxes
+ * (ЄСВ / ЄП / ВЗ for ФОП on simplified system).
+ * Extracts all 8-digit budget classification codes from the text.
+ */
+function isRoutineBotb0501(text: string): boolean {
+  const codes: string[] = []
+  const re = /\b(\d{8})\b/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) codes.push(m[1])
+  if (codes.length === 0) return false // no codes found → treat as non-routine
+  return codes.every(code => ROUTINE_BUDGET_CODES.has(code))
+}
+
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Detect alerts for newly arrived DPS documents.
+ * rawDocs  — full document list from DPS (current fetch)
+ * cachedIds — Set of document IDs already seen (from dps_cache)
+ *
+ * Rules per ALERT_POLICY.md:
+ *  - J1499202 (квитанція)       → skip
+ *  - BOTB0501 (нарахування):
+ *      only ЄСВ/ЄП/ВЗ codes     → skip (routine for ФОП-єдинник)
+ *      any other tax code        → alert
+ *  - csti=9999                   → skip (spam)
+ *  - D0300201 "не за адресою"    → skip
+ *  - D0300201 with /ІПК/         → alert (ІПК)
+ *  - D0300201 other              → alert (лист)
+ *  - F1419104 (довідка ДРФО)     → alert
+ *  - PDI* (запит від ДПІ)        → alert
+ */
+export function detectDocumentAlerts(
+  rawDocs: RawDpsDoc[],
+  cachedIds: Set<string>,
+  clientName: string
+): AlertPayload[] {
+  const alerts: AlertPayload[] = []
+
+  for (const doc of rawDocs) {
+    const id = String(doc.id)
+    if (cachedIds.has(id)) continue
+
+    const cdoc  = (doc.cdoc ?? '').trim()
+    const name  = (doc.name ?? '').trim()
+    const text  = doc.text ? stripHtml(doc.text) : ''
+    const csti  = doc.csti ?? 0
+    const date  = (doc.dateIn ?? '').slice(0, 10)
+
+    // Квитанція №2 — завжди ігноруємо
+    if (cdoc === 'J1499202') continue
+
+    // Спам від csti=9999 (Світовий банк тощо)
+    if (csti === 9999) continue
+
+    // BOTB0501 — нарахування зобов'язань
+    if (cdoc === 'BOTB0501') {
+      if (isRoutineBotb0501(text)) continue
+      // Non-routine tax — extract first non-routine line for context
+      const taxLine = text.split('по ').slice(1).find(l => {
+        const code = l.match(/\b(\d{8})\b/)?.[1]
+        return code && !ROUTINE_BUDGET_CODES.has(code)
+      }) ?? text.slice(0, 120)
+      alerts.push({
+        type: 'new_document',
+        message: `${clientName}: нове нарахування від ДПС (${date}) — ${taxLine.slice(0, 100)}`,
+        data: { docId: id, cdoc, csti, dateIn: doc.dateIn },
+      })
+      continue
+    }
+
+    // D0300201 — листи різного типу
+    if (cdoc === 'D0300201') {
+      if (text.includes('не за адресою')) continue
+      if (text.includes('/ІПК/') || name.includes('/ІПК/')) {
+        alerts.push({
+          type: 'new_document',
+          message: `${clientName}: отримано ІПК від ДПС (${date}) — ${name || text.slice(0, 80)}`,
+          data: { docId: id, cdoc, csti, dateIn: doc.dateIn },
+        })
+      } else {
+        alerts.push({
+          type: 'new_document',
+          message: `${clientName}: новий лист від ДПС (${date}) — ${name || text.slice(0, 80)}`,
+          data: { docId: id, cdoc, csti, dateIn: doc.dateIn },
+        })
+      }
+      continue
+    }
+
+    // F1419104 — довідка про доходи з ДРФО
+    if (cdoc === 'F1419104') {
+      alerts.push({
+        type: 'new_document',
+        message: `${clientName}: отримано довідку про доходи (ДРФО) від ${date}`,
+        data: { docId: id, cdoc, csti, dateIn: doc.dateIn },
+      })
+      continue
+    }
+
+    // PDI* — запит від ДПІ (потребує відповіді!)
+    if (cdoc.startsWith('PDI')) {
+      alerts.push({
+        type: 'new_document',
+        message: `${clientName}: ❗ запит від ДПІ (${date}) — ${name || text.slice(0, 80)}`,
+        data: { docId: id, cdoc, csti, dateIn: doc.dateIn },
+      })
+      continue
+    }
+  }
+
+  return alerts
 }
 
 const THRESHOLD = 1 // грн, to ignore floating-point noise
@@ -99,6 +231,7 @@ export function alertIcon(type: AlertType): string {
     case 'debt_cleared': return '✅'
     case 'overpayment_changed': return '💰'
     case 'status_changed': return '🏷️'
+    case 'new_document': return '📨'
     default: return '🔔'
   }
 }

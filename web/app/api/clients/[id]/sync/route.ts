@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto'
-import { signWithKepDecrypted, getCertOrgTaxId } from '@/lib/dps/signer'
+import { signWithKepDecrypted, getCertOrgTaxId, getCertValidTo } from '@/lib/dps/signer'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
 import { detectAlerts } from '@/lib/dps/alerts'
 import { sendAlertEmail } from '@/lib/email'
@@ -49,7 +49,7 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
   // Load token row
   const { data: tokenRow } = await supabase
     .from('api_tokens')
-    .select('kep_encrypted, kep_password_encrypted, kep_tax_id')
+    .select('kep_encrypted, kep_password_encrypted, kep_tax_id, kep_valid_to')
     .eq('client_id', id)
     .eq('user_id', user.id)
     .single()
@@ -97,6 +97,19 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
   }
 
   const taxId = (edrpou && /^\d{8}$/.test(edrpou)) ? edrpou : kepTaxId
+
+  // ── Backfill kep_valid_to if missing (old clients saved before the cert.valid.to fix) ──
+  if (!tokenRow.kep_valid_to) {
+    try {
+      const validTo = await getCertValidTo(kepDecrypted, password)
+      if (validTo) {
+        await supabase.from('api_tokens').update({ kep_valid_to: validTo }).eq('client_id', id).eq('user_id', user.id)
+        console.log(`[sync] backfilled kep_valid_to for client=${id}: ${validTo}`)
+      }
+    } catch (e) {
+      console.warn(`[sync] getCertValidTo failed for client=${id}:`, e)
+    }
+  }
 
   console.log(`[sync] client=${id} kepTaxId=${kepTaxId} edrpou=${edrpou} → signing with=${taxId}`)
 

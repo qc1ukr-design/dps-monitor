@@ -611,7 +611,9 @@ function parseCertDate(d: unknown): string {
  */
 function extractCertInfo(cert: InstanceType<typeof jk.Certificate>): KepInfo {
   const subj = cert.subject as Record<string, string>
-  const validity = cert.validity as { notBefore: unknown; notAfter: unknown }
+  // cert.valid = { from: number, to: number } — Unix timestamps set by jkurwa constructor
+  // cert.validity = { notBefore: { type, value }, notAfter: { type, value } } — raw ASN.1 (unusable directly)
+  const certValid = (cert as unknown as { valid?: { from?: unknown; to?: unknown } }).valid
   const issuer = cert.issuer as Record<string, string>
 
   const rawSerial = subj.serialNumber ?? ''
@@ -638,8 +640,8 @@ function extractCertInfo(cert: InstanceType<typeof jk.Certificate>): KepInfo {
     ownerName: personName || subj.commonName || orgFromCert || 'Невідомо',
     orgName: orgFromCert,
     serial: (cert.serial as Buffer | undefined)?.toString('hex') ?? '',
-    validFrom: parseCertDate(validity?.notBefore),
-    validTo: parseCertDate(validity?.notAfter),
+    validFrom: parseCertDate(certValid?.from),
+    validTo: parseCertDate(certValid?.to),
     taxId,
     ...(orgTaxIdFinal ? { orgTaxId: orgTaxIdFinal } : {}),
   }
@@ -759,6 +761,17 @@ export async function getCertOrgTaxId(kepDecrypted: string, password: string): P
   const box = await loadBoxFromDecrypted(kepDecrypted, password)
   const keyInfo = getSigningKey(box)
   return extractCertInfo(keyInfo.cert).orgTaxId ?? null
+}
+
+/**
+ * Extract kep_valid_to (ISO string) from a stored KEP.
+ * Used to backfill kep_valid_to for existing clients where it was saved as NULL
+ * due to the old bug of reading cert.validity.notAfter instead of cert.valid.to.
+ */
+export async function getCertValidTo(kepDecrypted: string, password: string): Promise<string | null> {
+  const box = await loadBoxFromDecrypted(kepDecrypted, password)
+  const keyInfo = getSigningKey(box)
+  return extractCertInfo(keyInfo.cert).validTo || null
 }
 
 /**

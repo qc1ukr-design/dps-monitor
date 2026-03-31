@@ -78,7 +78,11 @@ export async function POST(request: NextRequest) {
 
   // For ЮО: prefer organisation name from cert (orgName) over the director's personal name
   const clientName = kepInfo.orgName || kepInfo.ownerName || 'Без імені'
-  const edrpou = kepInfo.taxId || null
+  // Use orgTaxId (ЄДРПОУ, 8 digits from OID 2.5.4.97 organizationIdentifier) when present
+  // (ЮО director cert: orgTaxId = ЄДРПОУ, taxId = РНОКПП)
+  // Fallback to taxId for ФО/ФОП certs (no orgTaxId → taxId = РНОКПП used directly)
+  // NOTE: kep_tax_id always stores cert serialNumber (РНОКПП) for OAuth signing — NOT overridden
+  const edrpou = kepInfo.orgTaxId ?? kepInfo.taxId ?? null
 
   // Create client
   const { data: client, error: clientError } = await supabase

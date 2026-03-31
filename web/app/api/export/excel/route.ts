@@ -15,7 +15,7 @@ import ExcelJS from 'exceljs'
 import { normalizeBudget, normalizeProfile, normalizeReports } from '@/lib/dps/normalizer'
 import type { BudgetCalculations, TaxpayerProfile } from '@/lib/dps/types'
 import { decrypt } from '@/lib/crypto'
-import { loginWithKep } from '@/lib/dps/dps-auth'
+import { loginWithKep, loginWithKepStamp } from '@/lib/dps/dps-auth'
 
 const DPS_API  = 'https://cabinet.tax.gov.ua/ws/api'
 const DPS_A    = 'https://cabinet.tax.gov.ua/ws/a'
@@ -176,17 +176,33 @@ export async function GET() {
       const hasUuid = !!tok?.token_encrypted
       if (!hasKep && !hasUuid) return { clientId: c.id, reports: [], error: 'Немає KEP' }
 
-      const edrpou  = c.edrpou?.trim()          ?? ''
+      const edrpou   = c.edrpou?.trim() ?? ''
       const kepTaxId = (tok?.kep_tax_id ?? '').trim()
-      const taxId   = (edrpou && /^\d{8}$/.test(edrpou)) ? edrpou : kepTaxId
       const rptUrl  = `${DPS_API}/regdoc/list?periodYear=${RPT_YEAR}&page=0&size=100&sort=dget,desc`
       const rptUrlA = `${DPS_A}/regdoc/list?periodYear=${RPT_YEAR}&page=0&size=100&sort=dget,desc`
 
       if (hasKep) {
         try {
-          const { accessToken } = await loginWithKep(
-            decrypt(tok!.kep_encrypted!), decrypt(tok!.kep_password_encrypted!), taxId,
-          )
+          const kepDecrypted = decrypt(tok!.kep_encrypted!)
+          const kepPwd       = decrypt(tok!.kep_password_encrypted!)
+          const isYuo        = !!(edrpou && /^\d{8}$/.test(edrpou))
+
+          let accessToken: string | null = null
+
+          // For ЮО: use stamp cert OAuth (ЄДРПОУ context) to get ЮО reports
+          if (isYuo) {
+            const stampResult = await loginWithKepStamp(kepDecrypted, kepPwd)
+            if (typeof stampResult === 'object') {
+              accessToken = stampResult.accessToken
+            }
+          }
+
+          // Fallback to ФО OAuth (also used for ФО/ФОП clients)
+          if (!accessToken) {
+            const result = await loginWithKep(kepDecrypted, kepPwd, kepTaxId)
+            accessToken = result.accessToken
+          }
+
           const res = await fetch(rptUrl, {
             headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
             signal: AbortSignal.timeout(12000), cache: 'no-store',

@@ -170,6 +170,16 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
+  // Try to persist kep_org_name (requires migration 004 — silently skip if column missing)
+  if (kepInfo.orgName) {
+    await supabase
+      .from('api_tokens')
+      .update({ kep_org_name: kepInfo.orgName } as Record<string, string>)
+      .eq('client_id', id)
+      .eq('user_id', user.id)
+      // ignore error — column may not exist yet
+  }
+
   return NextResponse.json({ ok: true, kepInfo })
 }
 
@@ -180,20 +190,32 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
   const { data: { user }, error: authError } = await supabase.auth.getUser()
   if (authError || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { data } = await supabase
-    .from('api_tokens')
-    .select('kep_ca_name, kep_owner_name, kep_valid_to, kep_tax_id, updated_at')
-    .eq('client_id', id)
-    .eq('user_id', user.id)
-    .single()
+  // Try to read kep_org_name (requires migration 004) — fall back if column missing
+  const [baseResult, orgNameResult] = await Promise.all([
+    supabase
+      .from('api_tokens')
+      .select('kep_ca_name, kep_owner_name, kep_valid_to, kep_tax_id, updated_at')
+      .eq('client_id', id)
+      .eq('user_id', user.id)
+      .single(),
+    supabase
+      .from('api_tokens')
+      .select('kep_org_name')
+      .eq('client_id', id)
+      .eq('user_id', user.id)
+      .single(),
+  ])
 
+  const data = baseResult.data
   if (!data?.kep_ca_name) return NextResponse.json({ configured: false })
+
+  const orgName = orgNameResult.error ? '' : ((orgNameResult.data as Record<string, string | null>)?.kep_org_name ?? '')
 
   return NextResponse.json({
     configured: true,
     caName: data.kep_ca_name,
     ownerName: data.kep_owner_name,
-    orgName: '',   // populated only right after upload (not persisted yet)
+    orgName,
     validTo: data.kep_valid_to,
     taxId: data.kep_tax_id,
     updatedAt: data.updated_at,

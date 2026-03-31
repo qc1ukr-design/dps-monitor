@@ -71,6 +71,7 @@ export interface KepInfo {
   validFrom: string
   validTo: string
   taxId: string       // ЄДРПОУ (8 digits) for ЮО certs; РНОКПП (10 digits) for personal
+  orgTaxId?: string   // ЄДРПОУ from organizationIdentifier (OID 2.5.4.97) in director cert — present only for ЮО
 }
 
 // File extension classification
@@ -259,8 +260,12 @@ const CMP_SERVERS = [
  * the case for monobank KEP — the cert must be retrieved from the issuing CA.
  *
  * Based on jkurwa's examples/certfetch.js.
+ *
+ * @param keyStartIndex  Which key pair to request certs for (default 0).
+ *   For ЮО bundles: director keys are at 0–1, seal keys at 2–3. Pass 2 to
+ *   request the seal key's cert from the CA.
  */
-async function fetchCertFromCA(box: InstanceType<typeof jk.Box>): Promise<Buffer[]> {
+async function fetchCertFromCA(box: InstanceType<typeof jk.Box>, keyStartIndex = 0): Promise<Buffer[]> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const Message = require('jkurwa/lib/models/Message') as new (data: Buffer | object) => {
     as_asn1: () => Buffer
@@ -282,8 +287,11 @@ async function fetchCertFromCA(box: InstanceType<typeof jk.Box>): Promise<Buffer
   const keyids = b.keys.map(info => info.priv.pub().keyid(b.algo))
   const ct = Buffer.alloc(120)
   ct.fill(0)
-  keyids[0].copy(ct, 0x0C)
-  ;(keyids[1] ?? keyids[0]).copy(ct, 0x2C)
+  const idx0 = keyStartIndex
+  const idx1 = keyStartIndex + 1
+  if (idx0 >= keyids.length) return []
+  keyids[idx0].copy(ct, 0x0C)
+  ;(keyids[idx1] ?? keyids[idx0]).copy(ct, 0x2C)
   ct[0x6C] = 0x1
   ct[0x70] = 0x1
   ct[0x08] = 2
@@ -385,9 +393,13 @@ async function loadBox(pfxBuffer: Buffer, password: string): Promise<InstanceTyp
 
 /**
  * Load a Box from pre-separated key and cert file buffers.
- * Used when user uploads .dat + .cer files separately.
- * If no certs are provided and jkurwa finds none internally,
- * falls back to CMP fetch from Ukrainian CA servers.
+ * Used when user uploads .dat + .cer files separately, or multiple key files (ЮО).
+ *
+ * Fallback chain when certificates are missing after initial load:
+ *   1. node-forge — decrypts modern PKCS#12 cert bags (AES/PBKDF2)
+ *   2. CMP fetch (all keys at index 0) — full cert-less box
+ *   3. CMP fetch for partial cert-less keys (ЮО: seal key at index 2–3 has no cert
+ *      even though director keys at 0–1 do). Re-loads with existing + new certs.
  */
 async function loadBoxFromFiles(
   keyBuffers: Buffer[],
@@ -398,8 +410,8 @@ async function loadBoxFromFiles(
   const box = new jk.Box({ algo })
   box.loadMaterial([{ keyBuffers, certBuffers, password }])
 
-  // If no certs were supplied and none were loaded, try CMP fetch
-  type BoxInternal = { keys: Array<{ priv: unknown; cert: unknown }>; certs: unknown[] }
+  type KeyEntry = { priv: unknown; cert: InstanceType<typeof jk.Certificate> }
+  type BoxInternal = { keys: KeyEntry[]; certs: InstanceType<typeof jk.Certificate>[] }
   const b = box as unknown as BoxInternal
   const noLinkedCerts =
     !(b.certs?.length) && (b.keys ?? []).every(k => !k.cert)
@@ -421,6 +433,67 @@ async function loadBoxFromFiles(
       const box3 = new jk.Box({ algo })
       box3.loadMaterial([{ keyBuffers, certBuffers: caCerts, password }])
       return box3
+    }
+  }
+
+  // Fallback 3: some keys have certs, others don't (ЮО director+seal bundle).
+  // Director keys (0–1) have certs from the key file; seal keys (2–3) need their cert.
+  // Strategy: try forge + individual jkurwa reload for each buffer, then CMP.
+  if (!noLinkedCerts && certBuffers.length === 0) {
+    const firstUncertedIdx = (b.keys ?? []).findIndex(k => k.priv && !k.cert)
+    if (firstUncertedIdx >= 0) {
+      // Collect already-linked cert DER buffers so they survive the reload
+      const existingCertBuffers: Buffer[] = []
+      for (const k of b.keys ?? []) {
+        if (k.cert) {
+          try {
+            existingCertBuffers.push((k.cert as unknown as { as_asn1: () => Buffer }).as_asn1())
+          } catch { /* skip */ }
+        }
+      }
+      for (const c of b.certs ?? []) {
+        try {
+          existingCertBuffers.push((c as unknown as { as_asn1: () => Buffer }).as_asn1())
+        } catch { /* skip */ }
+      }
+
+      // First, try forge and individual-file jkurwa loading for each key buffer
+      // (handles PKCS#12 with modern AES cert bags, and some single-file edge cases)
+      const extraCertBuffers: Buffer[] = []
+      for (const keyBuf of keyBuffers) {
+        const forgeCerts = extractCertsFromPfxFallback(keyBuf, password)
+        extraCertBuffers.push(...forgeCerts)
+
+        try {
+          const singleBox = new jk.Box({ algo })
+          singleBox.loadMaterial([{ keyBuffers: [keyBuf], certBuffers: [], password }])
+          const sb = singleBox as unknown as BoxInternal
+          for (const k of sb.keys ?? []) {
+            if (k.cert) {
+              try { extraCertBuffers.push((k.cert as unknown as { as_asn1: () => Buffer }).as_asn1()) } catch { /* skip */ }
+            }
+          }
+          for (const c of sb.certs ?? []) {
+            try { extraCertBuffers.push((c as unknown as { as_asn1: () => Buffer }).as_asn1()) } catch { /* skip */ }
+          }
+        } catch { /* skip */ }
+      }
+
+      if (extraCertBuffers.length > 0) {
+        const boxTry = new jk.Box({ algo })
+        boxTry.loadMaterial([{ keyBuffers, certBuffers: [...existingCertBuffers, ...extraCertBuffers], password }])
+        const bTry = boxTry as unknown as BoxInternal
+        const stillUncerted = (bTry.keys ?? []).some(k => k.priv && !k.cert)
+        if (!stillUncerted) return boxTry
+      }
+
+      // Last resort: CMP fetch from Ukrainian CA for the uncerted key pair
+      const sealCerts = await fetchCertFromCA(box, firstUncertedIdx)
+      if (sealCerts.length > 0) {
+        const box4 = new jk.Box({ algo })
+        box4.loadMaterial([{ keyBuffers, certBuffers: [...existingCertBuffers, ...sealCerts], password }])
+        return box4
+      }
     }
   }
 
@@ -549,6 +622,17 @@ function extractCertInfo(cert: InstanceType<typeof jk.Certificate>): KepInfo {
   const personName = [subj.givenName, subj.surname].filter(Boolean).join(' ')
   const orgFromCert = subj.organizationName ?? ''
 
+  // organizationIdentifier (OID 2.5.4.97) — present in ЮО director certs.
+  // Contains the legal entity's ЄДРПОУ (8 digits), e.g. "ЄДРПОУ44448678" or "44448678".
+  // DPS Cabinet reads this field from the signed cert to determine ЮО context automatically,
+  // without requiring a separate stamp/seal certificate.
+  const rawOrgId = subj.organizationIdentifier ?? subj['2.5.4.97'] ?? ''
+  const orgTaxId = rawOrgId
+    .replace(/^(ЄДРПОУ|EDRPOU|UA-E)/i, '')
+    .trim()
+    .replace(/\D/g, '')   // keep digits only
+  const orgTaxIdFinal = /^\d{8}$/.test(orgTaxId) ? orgTaxId : undefined
+
   return {
     caName: issuer.organizationName ?? issuer.commonName ?? 'Невідомий АЦСК',
     ownerName: personName || subj.commonName || orgFromCert || 'Невідомо',
@@ -557,6 +641,7 @@ function extractCertInfo(cert: InstanceType<typeof jk.Certificate>): KepInfo {
     validFrom: parseCertDate(validity?.notBefore),
     validTo: parseCertDate(validity?.notAfter),
     taxId,
+    ...(orgTaxIdFinal ? { orgTaxId: orgTaxIdFinal } : {}),
   }
 }
 
@@ -662,19 +747,66 @@ export async function getCertTaxId(kepDecrypted: string, password: string): Prom
 }
 
 /**
+ * Get the ЄДРПОУ (legal entity code) embedded in the director's signing certificate.
+ *
+ * Ukrainian ЮО director certs contain the organization's ЄДРПОУ in the
+ * organizationIdentifier field (OID 2.5.4.97). DPS Cabinet reads this field
+ * automatically to determine ЮО context — no stamp cert required.
+ *
+ * Returns null if the cert has no organizationIdentifier (personal/ФОП cert).
+ */
+export async function getCertOrgTaxId(kepDecrypted: string, password: string): Promise<string | null> {
+  const box = await loadBoxFromDecrypted(kepDecrypted, password)
+  const keyInfo = getSigningKey(box)
+  return extractCertInfo(keyInfo.cert).orgTaxId ?? null
+}
+
+/**
  * Get the stamp (seal / печатка) key from the box.
  * For ЮО: the stamp cert has ЄДРПОУ as serialNumber.
  * Returns null if no stamp key is found.
+ *
+ * Falls back to scanning all box keys for one whose cert has 8-digit ЄДРПОУ,
+ * since some CA providers don't set the 'stamp' key usage flag that jkurwa
+ * uses for box.keyFor('stamp') classification.
  */
 function getStampKey(box: InstanceType<typeof jk.Box>): {
   priv: unknown
   cert: InstanceType<typeof jk.Certificate>
 } | null {
   type KeyEntry = { priv: unknown; cert: InstanceType<typeof jk.Certificate> }
+
+  // 1. Standard 'stamp' usage type
   try {
     const k = box.keyFor('stamp', undefined) as KeyEntry
     if (k?.priv && k?.cert) return k
   } catch { /* no stamp key */ }
+
+  // 2. Fallback: scan all keys for one whose cert serialNumber is 8-digit ЄДРПОУ
+  //    Some CA providers don't set the keyUsage extension that jkurwa uses to
+  //    classify keys as 'stamp', so box.keyFor('stamp') returns null even when
+  //    the org seal cert is present in the loaded key bundle.
+  type BoxInternal = { keys: KeyEntry[]; certs: InstanceType<typeof jk.Certificate>[] }
+  const b = box as unknown as BoxInternal
+  for (const key of b.keys ?? []) {
+    if (!key.priv || !key.cert) continue
+    try {
+      const info = extractCertInfo(key.cert)
+      if (/^\d{8}$/.test(info.taxId)) return key
+    } catch { /* skip invalid cert */ }
+  }
+
+  // 3. Last resort: stamp cert is in box.certs (unlinked from key by jkurwa),
+  //    but the private key is still in box.keys (without a cert attached).
+  //    Pair the ЄДРПОУ cert with the key that has no linked cert.
+  const edrpouCert = (b.certs ?? []).find(cert => {
+    try { return /^\d{8}$/.test(extractCertInfo(cert).taxId) } catch { return false }
+  })
+  if (edrpouCert) {
+    const keyWithoutCert = (b.keys ?? []).find(k => k.priv && !k.cert)
+    if (keyWithoutCert) return { priv: keyWithoutCert.priv, cert: edrpouCert }
+  }
+
   return null
 }
 
@@ -689,6 +821,41 @@ export async function getStampCertTaxId(kepDecrypted: string, password: string):
   if (!stampKey) return null
   const info = extractCertInfo(stampKey.cert)
   return /^\d{8}$/.test(info.taxId) ? info.taxId : null
+}
+
+/**
+ * Returns a diagnostic string describing the contents of the loaded KEP box.
+ * Used for debugging when stamp cert is not found.
+ * Format: "keys:N[cert/no-cert taxId=...]|certs:N[taxId=...]"
+ */
+export async function diagnoseBox(kepDecrypted: string, password: string): Promise<string> {
+  try {
+    const box = await loadBoxFromDecrypted(kepDecrypted, password)
+    type KeyEntry = { priv: unknown; cert: InstanceType<typeof jk.Certificate> }
+    type BoxInternal = { keys: KeyEntry[]; certs: InstanceType<typeof jk.Certificate>[] }
+    const b = box as unknown as BoxInternal
+    const keyInfos = (b.keys ?? []).map((k, i) => {
+      if (!k.cert) return `k${i}:no-cert`
+      try {
+        const info = extractCertInfo(k.cert)
+        const subj = k.cert.subject as Record<string, string>
+        const orgId = subj.organizationIdentifier ?? subj['2.5.4.97'] ?? ''
+        return `k${i}:taxId=${info.taxId}${info.orgTaxId ? ` orgTaxId=${info.orgTaxId}` : ''}(raw=${subj.serialNumber ?? '?'}${orgId ? ` orgId=${orgId}` : ''})`
+      } catch (e) { return `k${i}:cert-err(${String(e).slice(0, 40)})` }
+    })
+    const certInfos = (b.certs ?? []).map((c, i) => {
+      try {
+        const info = extractCertInfo(c)
+        const subj = c.subject as Record<string, string>
+        const orgId = subj.organizationIdentifier ?? subj['2.5.4.97'] ?? ''
+        return `c${i}:taxId=${info.taxId}${info.orgTaxId ? ` orgTaxId=${info.orgTaxId}` : ''}(raw=${subj.serialNumber ?? '?'}${orgId ? ` orgId=${orgId}` : ''})`
+      } catch (e) { return `c${i}:err(${String(e).slice(0, 40)})` }
+    })
+    const fmt = kepDecrypted.startsWith('{') ? 'v2' : 'legacy'
+    return `[${fmt}] keys:${keyInfos.join(',') || 'none'} | certs:${certInfos.join(',') || 'none'}`
+  } catch (e) {
+    return `diagnose-failed:${String(e).slice(0, 100)}`
+  }
 }
 
 /**

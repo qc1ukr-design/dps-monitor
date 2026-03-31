@@ -18,7 +18,7 @@
  * ALL taxpayers share the same client credential; the per-user identity
  * is established via the KEP signature in the password field.
  */
-import { signWithKepDecrypted, getCertTaxId } from './signer'
+import { signWithKepDecrypted, getCertTaxId, getStampCertTaxId, signWithStampKey, diagnoseBox } from './signer'
 
 const DPS_OAUTH_URL = 'https://cabinet.tax.gov.ua/ws/auth/oauth/token'
 
@@ -92,6 +92,139 @@ export async function loginWithKepAsYuo(
     expiresIn: data.expires_in ?? 600,
     taxIdUsed: edrpou,
   }
+}
+
+
+/**
+ * ЮО OAuth variant: same username format as loginWithKepAsYuo but signs ЄДРПОУ
+ * instead of РНОКПП. Some DPS builds expect the org's ЄДРПОУ as the signed payload
+ * to prove the director is claiming ЮО context (not personal РНОКПП context).
+ */
+export async function loginWithKepAsYuoSignEdrpou(
+  kepDecrypted: string,
+  password: string,
+  edrpou: string,
+): Promise<DpsSession | string> {
+  const rnokpp = await getCertTaxId(kepDecrypted, password)
+  const username = `${rnokpp}-${edrpou}-${Date.now()}`
+  let signature: string
+  try {
+    signature = await signWithKepDecrypted(kepDecrypted, password, edrpou)
+  } catch (e) {
+    return `sign-edrpou:${String(e).slice(0, 100)}`
+  }
+  const qs = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`
+  const res = await fetch(`${DPS_OAUTH_URL}?${qs}`, {
+    method: 'POST',
+    headers: { 'Authorization': `Basic ${DPS_CLIENT_BASIC}` },
+    signal: AbortSignal.timeout(25000),
+    cache: 'no-store',
+  })
+  if (!res.ok) {
+    const preview = await res.text().catch(() => '')
+    return `yuo-se-${res.status}:${preview.slice(0, 150)}`
+  }
+  const data = await res.json() as { access_token: string; expires_in?: number }
+  if (!data.access_token) return 'yuo-se-no-token'
+  return { accessToken: data.access_token, expiresIn: data.expires_in ?? 600, taxIdUsed: edrpou }
+}
+
+/**
+ * Authenticate to DPS using the stamp/seal certificate (ЄДРПОУ).
+ *
+ * For ЮО (legal entity): the stamp cert has ЄДРПОУ as its serialNumber.
+ * OAuth flow mirrors the ФО flow but uses the stamp key:
+ *   username = {ЄДРПОУ}-{ЄДРПОУ}-{timestamp}
+ *   password = base64(CAdES-BES of ЄДРПОУ signed with stamp key)
+ * → DPS Spring Security sees ЄДРПОУ cert, returns ЮО-context access_token.
+ *
+ * Falls back gracefully — returns an error string instead of throwing so the
+ * caller can continue to the next authentication strategy.
+ */
+export async function loginWithKepStamp(
+  kepDecrypted: string,
+  password: string,
+): Promise<DpsSession | string> {
+  let edrpou: string | null
+  try {
+    edrpou = await getStampCertTaxId(kepDecrypted, password)
+  } catch (e) {
+    return `stamp-cert-read:${String(e).slice(0, 100)}`
+  }
+  if (!edrpou) {
+    const diag = await diagnoseBox(kepDecrypted, password).catch(() => 'diag-failed')
+    return `no-stamp-cert | ${diag}`
+  }
+
+  const username = `${edrpou}-${edrpou}-${Date.now()}`
+  let signature: string
+  try {
+    signature = await signWithStampKey(kepDecrypted, password, edrpou)
+  } catch (e) {
+    return `stamp-sign:${String(e).slice(0, 100)}`
+  }
+
+  const qs = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`
+  const url = `${DPS_OAUTH_URL}?${qs}`
+  console.log('[dps-auth] STAMP OAuth POST | edrpou:', edrpou, '| sigLen:', signature.length)
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Authorization': `Basic ${DPS_CLIENT_BASIC}` },
+    signal: AbortSignal.timeout(25000),
+    cache: 'no-store',
+  })
+
+  if (!res.ok) {
+    const preview = await res.text().catch(() => '')
+    console.log('[dps-auth] STAMP OAuth error', res.status, preview.slice(0, 200))
+    return `stamp-oauth-${res.status}:${preview.slice(0, 150)}`
+  }
+
+  const data = await res.json() as { access_token: string; expires_in?: number }
+  if (!data.access_token) return 'stamp-no-token'
+
+  return {
+    accessToken: data.access_token,
+    expiresIn: data.expires_in ?? 600,
+    taxIdUsed: edrpou,
+  }
+}
+
+
+/**
+ * ЮО OAuth variant: username = {ЄДРПОУ}-{ЄДРПОУ}-{ts}, signs ЄДРПОУ with director cert.
+ *
+ * Mirrors the stamp-key format exactly but uses the director's personal cert.
+ * Some DPS builds accept this when the director is the only authorized signatory.
+ * Returns error string (not throw) so caller can chain fallbacks.
+ */
+export async function loginWithKepAsYuoEdrpouFormat(
+  kepDecrypted: string,
+  password: string,
+  edrpou: string,
+): Promise<DpsSession | string> {
+  let signature: string
+  try {
+    signature = await signWithKepDecrypted(kepDecrypted, password, edrpou)
+  } catch (e) {
+    return `yuo-ef-sign:${String(e).slice(0, 100)}`
+  }
+  const username = `${edrpou}-${edrpou}-${Date.now()}`
+  const qs = `grant_type=password&username=${encodeURIComponent(username)}&password=${encodeURIComponent(signature)}`
+  const res = await fetch(`${DPS_OAUTH_URL}?${qs}`, {
+    method: 'POST',
+    headers: { 'Authorization': `Basic ${DPS_CLIENT_BASIC}` },
+    signal: AbortSignal.timeout(25000),
+    cache: 'no-store',
+  })
+  if (!res.ok) {
+    const preview = await res.text().catch(() => '')
+    return `yuo-ef-${res.status}:${preview.slice(0, 150)}`
+  }
+  const data = await res.json() as { access_token: string; expires_in?: number }
+  if (!data.access_token) return 'yuo-ef-no-token'
+  return { accessToken: data.access_token, expiresIn: data.expires_in ?? 600, taxIdUsed: edrpou }
 }
 
 

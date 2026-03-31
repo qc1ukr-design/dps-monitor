@@ -140,8 +140,11 @@ export default function ClientSettingsPage() {
   return (
     <div className="max-w-lg mx-auto py-10 px-4 space-y-6">
       <div>
-        <Link href={`/dashboard/client/${id}`} className="text-sm text-gray-400 hover:text-gray-600">
-          ← Назад
+        <Link
+          href={`/dashboard/client/${id}`}
+          className="inline-flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-700 text-sm font-medium px-3 py-1.5 rounded-lg transition-all"
+        >
+          ‹ Назад
         </Link>
         <h1 className="text-2xl font-bold text-gray-900 mt-2">Налаштування контрагента</h1>
       </div>
@@ -253,7 +256,8 @@ export default function ClientSettingsPage() {
                 Якщо ключ та сертифікат у різних файлах — оберіть їх одночасно.
               </p>
               <p className="text-xs text-amber-600 mt-1">
-                <strong>Для ЮО:</strong> оберіть одночасно <em>ключ директора</em> і <em>ключ-печатку</em> підприємства — система автоматично визначить правильний підписант.
+                <strong>Для ЮО:</strong> оберіть одночасно <em>ключ директора</em> і <em>ключ-печатку</em> підприємства.
+                Якщо сертифікат печатки зберігається в окремому файлі (.cer) — додайте його також.
               </p>
               {selectedFiles.length > 1 && (
                 <div className="mt-1.5 flex flex-wrap gap-1">

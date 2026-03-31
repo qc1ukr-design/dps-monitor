@@ -133,6 +133,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: tokenError.message }, { status: 500 })
   }
 
+  // Try to persist kep_org_name (requires migration 004 — silently skip if column missing)
+  if (kepInfo.orgName) {
+    await supabase
+      .from('api_tokens')
+      .update({ kep_org_name: kepInfo.orgName } as Record<string, string>)
+      .eq('client_id', client.id)
+      .eq('user_id', user.id)
+      // ignore error — column may not exist yet
+  }
+
   return NextResponse.json({
     id: client.id,
     name: clientName,

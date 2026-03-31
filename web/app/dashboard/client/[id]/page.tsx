@@ -86,8 +86,11 @@ export default async function ClientPage({ params }: PageProps) {
     <div className="max-w-4xl mx-auto py-10 px-4 space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <Link href="/dashboard/clients" className="text-sm text-gray-400 hover:text-gray-600">
-            ← Контрагенти
+          <Link
+            href="/dashboard/clients"
+            className="inline-flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-700 text-sm font-medium px-3 py-1.5 rounded-lg transition-all"
+          >
+            ‹ Контрагенти
           </Link>
           <h1 className="text-2xl font-bold text-gray-900 mt-2">{client.name}</h1>
           {client.edrpou && (
@@ -187,24 +190,28 @@ export default async function ClientPage({ params }: PageProps) {
       <TaxpayerProfileCard profile={profileData} isMock={profileIsMock} />
       <BudgetCalculationsTable data={budgetData} isMock={budgetIsMock} />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Link href={`/dashboard/client/${id}/documents`} className="block">
-          <div className="bg-white rounded-xl border border-gray-200 px-6 py-5 hover:border-blue-300 hover:shadow-sm transition flex items-center justify-between h-full">
-            <div>
-              <h2 className="text-base font-semibold text-gray-900">📥 Вхідна документація</h2>
-              <p className="text-sm text-gray-500 mt-0.5">Листи та повідомлення від ДПС</p>
-            </div>
-            <span className="text-gray-400">→</span>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Link
+          href={`/dashboard/client/${id}/documents`}
+          className="flex items-center gap-4 bg-white rounded-xl border-2 border-gray-200 px-6 py-5 hover:border-blue-400 hover:bg-blue-50 active:bg-blue-100 transition-all cursor-pointer select-none touch-manipulation"
+        >
+          <span className="text-3xl">📥</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-base font-semibold text-gray-900">Вхідна документація</p>
+            <p className="text-sm text-gray-500">Листи та повідомлення від ДПС</p>
           </div>
+          <span className="text-blue-500 text-xl font-bold">›</span>
         </Link>
-        <Link href={`/dashboard/client/${id}/reports`} className="block">
-          <div className="bg-white rounded-xl border border-gray-200 px-6 py-5 hover:border-blue-300 hover:shadow-sm transition flex items-center justify-between h-full">
-            <div>
-              <h2 className="text-base font-semibold text-gray-900">📋 Звітність</h2>
-              <p className="text-sm text-gray-500 mt-0.5">Статуси поданих звітів</p>
-            </div>
-            <span className="text-gray-400">→</span>
+        <Link
+          href={`/dashboard/client/${id}/reports`}
+          className="flex items-center gap-4 bg-white rounded-xl border-2 border-gray-200 px-6 py-5 hover:border-blue-400 hover:bg-blue-50 active:bg-blue-100 transition-all cursor-pointer select-none touch-manipulation"
+        >
+          <span className="text-3xl">📋</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-base font-semibold text-gray-900">Звітність</p>
+            <p className="text-sm text-gray-500">Статуси поданих звітів</p>
           </div>
+          <span className="text-blue-500 text-xl font-bold">›</span>
         </Link>
       </div>
     </div>

@@ -1,8 +1,10 @@
+import { Suspense } from 'react'
 import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { decrypt } from '@/lib/crypto'
-import { loginWithKep, loginWithKepAsYuo } from '@/lib/dps/dps-auth'
+import { signWithKepDecrypted, getCertOrgTaxId } from '@/lib/dps/signer'
+import { loginWithKep, loginWithKepAsYuo, loginWithKepAsYuoSignEdrpou, loginWithKepStamp } from '@/lib/dps/dps-auth'
 import { normalizeReports } from '@/lib/dps/normalizer'
 import type { ReportsList, TaxReport, BudgetCalculations } from '@/lib/dps/types'
 
@@ -11,8 +13,9 @@ interface PageProps {
   searchParams: Promise<{ year?: string; tab?: string; period?: string }>
 }
 
-const DPS_API = 'https://cabinet.tax.gov.ua/ws/api'
-const DPS_A   = 'https://cabinet.tax.gov.ua/ws/a'
+const DPS_PUBLIC = 'https://cabinet.tax.gov.ua/ws/public_api'
+const DPS_API    = 'https://cabinet.tax.gov.ua/ws/api'
+const DPS_A      = 'https://cabinet.tax.gov.ua/ws/a'
 
 async function fetchReports(
   clientId: string,
@@ -35,8 +38,9 @@ async function fetchReports(
     return { reports: [], total: 0, hasToken: false, isMock: true, tokenExpired: false }
   }
 
-  const url  = `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
-  const urlA = `${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
+  const url      = `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
+  const urlPub   = `${DPS_PUBLIC}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
+  const urlA     = `${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
   const opts   = { Accept: 'application/json' }
   let kepDebug = '', uuidDebug = ''
 
@@ -47,7 +51,43 @@ async function fetchReports(
 
     const isYuo = !!(clientEdrpou && /^\d{8}$/.test(clientEdrpou))
 
-    // 1. For ЮО: OAuth with username={РНОКПП}-{ЄДРПОУ}-{ts}, signs РНОКПП → ЮО context
+    // 0. ws/public_api with raw KEP signature — identical auth to sync route.
+    //    For ЮО director cert: cert embeds ЄДРПОУ in organizationIdentifier (OID 2.5.4.97).
+    //    DPS reads this field automatically → grants ЮО context without stamp cert.
+    //    Sign order: cert's own orgTaxId → clientEdrpou fallback → РНОКПП for ФО.
+    try {
+      const certOrgTaxId = await getCertOrgTaxId(kepDecrypted, kepPwd)
+      const signTaxId = certOrgTaxId ?? (isYuo ? clientEdrpou! : kepTaxId)
+      console.log(`[reports] pub_api sign taxId=${signTaxId} certOrgTaxId=${certOrgTaxId ?? 'none'} isYuo=${isYuo}`)
+      const authHeader = await signWithKepDecrypted(kepDecrypted, kepPwd, signTaxId)
+      const res = await fetch(urlPub, {
+        headers: { Authorization: authHeader, ...opts },
+        signal: AbortSignal.timeout(12000), cache: 'no-store',
+      })
+      if (res.ok) return { ...normalizeReports(await res.json()), hasToken: true, isMock: false, tokenExpired: false }
+      kepDebug = `pub→${res.status}(signed=${signTaxId})`
+    } catch (e) { kepDebug = `pub→${String(e).slice(0, 100)}` }
+
+    // 1. For ЮО: stamp cert OAuth (ЄДРПОУ-ЄДРПОУ-ts, stamp key signs ЄДРПОУ → ЮО context)
+    if (isYuo) {
+      try {
+        const stampResult = await loginWithKepStamp(kepDecrypted, kepPwd)
+        if (typeof stampResult === 'object') {
+          const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${stampResult.accessToken}`, ...opts },
+            signal: AbortSignal.timeout(12000), cache: 'no-store',
+          })
+          if (res.ok) {
+            return { ...normalizeReports(await res.json()), hasToken: true, isMock: false, tokenExpired: false }
+          }
+          kepDebug = `stamp→bearer:${res.status}`
+        } else {
+          kepDebug = `stamp→${stampResult.slice(0, 150)}`
+        }
+      } catch (e) { kepDebug = `stamp→${String(e).slice(0, 150)}` }
+    }
+
+    // 2. For ЮО: OAuth {РНОКПП}-{ЄДРПОУ}-ts, signs РНОКПП
     if (isYuo) {
       try {
         const yuoResult = await loginWithKepAsYuo(kepDecrypted, kepPwd, clientEdrpou!)
@@ -59,14 +99,34 @@ async function fetchReports(
           if (res.ok) {
             return { ...normalizeReports(await res.json()), hasToken: true, isMock: false, tokenExpired: false }
           }
-          kepDebug = `yuo-oauth→bearer:${res.status}`
+          kepDebug += ` | yuo→bearer:${res.status}`
         } else {
-          kepDebug = `yuo-oauth→${yuoResult.slice(0, 150)}`
+          kepDebug += ` | yuo→${yuoResult.slice(0, 80)}`
         }
-      } catch (e) { kepDebug = `yuo-oauth→${String(e).slice(0, 150)}` }
+      } catch (e) { kepDebug += ` | yuo→${String(e).slice(0, 80)}` }
     }
 
-    // 2. OAuth Bearer with director РНОКПП (works for ФО; for ЮО returns F-forms only)
+    // 3. For ЮО: OAuth {РНОКПП}-{ЄДРПОУ}-ts, signs ЄДРПОУ
+    if (isYuo) {
+      try {
+        const r = await loginWithKepAsYuoSignEdrpou(kepDecrypted, kepPwd, clientEdrpou!)
+        if (typeof r === 'object') {
+          const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${r.accessToken}`, ...opts },
+            signal: AbortSignal.timeout(12000), cache: 'no-store',
+          })
+          if (res.ok) {
+            return { ...normalizeReports(await res.json()), hasToken: true, isMock: false, tokenExpired: false }
+          }
+          kepDebug += ` | yuo-se→bearer:${res.status}`
+        } else {
+          kepDebug += ` | yuo-se→${r.slice(0, 80)}`
+        }
+      } catch (e) { kepDebug += ` | yuo-se→${String(e).slice(0, 60)}` }
+    }
+
+    // 4. ФО OAuth Bearer — only for ФО/ФОП clients, NOT for ЮО.
+    //    Using ФО OAuth for ЮО would return director's personal declarations (wrong data).
     if (!isYuo) {
       try {
         const { accessToken } = await loginWithKep(kepDecrypted, kepPwd, kepTaxId)
@@ -154,6 +214,90 @@ function StatusBadge({ status, text }: { status: TaxReport['status']; text: stri
 const CURRENT_YEAR = new Date().getFullYear()
 const YEARS = Array.from({ length: 4 }, (_, i) => CURRENT_YEAR - i)
 
+// ── Skeleton shown while DPS fetches ─────────────────────────────────────────
+function TableSkeleton() {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="border-b border-gray-100 bg-gray-50 h-10" />
+      {[0, 1, 2, 3, 4].map(i => (
+        <div key={i} className="border-b border-gray-100 px-4 py-3 flex gap-4 items-center">
+          <div className="h-3 w-20 bg-gray-100 rounded animate-pulse" />
+          <div className="h-3 flex-1 bg-gray-100 rounded animate-pulse" />
+          <div className="h-3 w-16 bg-gray-100 rounded animate-pulse" />
+          <div className="h-3 w-16 bg-gray-100 rounded animate-pulse" />
+          <div className="h-3 w-24 bg-gray-100 rounded animate-pulse" />
+          <div className="h-5 w-20 bg-gray-100 rounded-full animate-pulse" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Async component: slow DPS fetch (runs inside Suspense) ───────────────────
+async function ReportsContent({
+  clientId, userId, year, tab, period, edrpou,
+}: {
+  clientId: string
+  userId: string
+  year: number
+  tab: 'list' | 'submitted'
+  period: Period
+  edrpou?: string
+}) {
+  const fetchYear = tab === 'submitted' ? CURRENT_YEAR : year
+  const { reports, total, hasToken, isMock, tokenExpired, debugError } =
+    await fetchReports(clientId, userId, fetchYear, edrpou)
+
+  const periodData = getPeriodRange(period)
+  const filteredReports = tab === 'submitted' && !isMock
+    ? filterByPeriod(reports, period) : reports
+
+  const accepted   = filteredReports.filter(r => r.status === 'accepted').length
+  const rejected   = filteredReports.filter(r => r.status === 'rejected').length
+  const processing = filteredReports.filter(r => r.status === 'processing').length
+
+  if (tab === 'list') {
+    return (
+      <div className="space-y-4">
+        {!isMock && total > 0 && (
+          <div className="flex justify-end">
+            <span className="text-sm text-gray-400">{total} звітів</span>
+          </div>
+        )}
+        <ReportsTable reports={reports} total={total} hasToken={hasToken} isMock={isMock}
+          tokenExpired={tokenExpired} debugError={debugError} clientId={clientId} year={year} />
+      </div>
+    )
+  }
+
+  // submitted tab
+  return (
+    <div className="space-y-4">
+      {!isMock && filteredReports.length > 0 && (
+        <div className="grid grid-cols-4 gap-3">
+          {[
+            { label: 'Всього',    value: filteredReports.length, color: 'text-gray-800'    },
+            { label: 'Прийнято',  value: accepted,               color: 'text-emerald-600' },
+            { label: 'В обробці', value: processing,             color: 'text-blue-600'    },
+            { label: 'Відхилено', value: rejected,               color: 'text-red-600'     },
+          ].map(s => (
+            <div key={s.label} className="bg-white rounded-xl border border-gray-200 px-4 py-3 text-center">
+              <p className={`text-2xl font-bold tabular-nums ${s.color}`}>{s.value}</p>
+              <p className="text-xs text-gray-400 mt-0.5">{s.label}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      <ReportsTable reports={filteredReports} total={filteredReports.length}
+        hasToken={hasToken} isMock={isMock} tokenExpired={tokenExpired}
+        debugError={debugError} clientId={clientId} year={year}
+        emptyLabel={`Звітів за ${periodData.label.toLowerCase()} не знайдено`}
+        showFooter={false}
+      />
+    </div>
+  )
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 export default async function ReportsPage({ params, searchParams }: PageProps) {
   const { id } = await params
@@ -164,50 +308,42 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
     ? (periodParam as Period) : 'quarter'
   const year   = Number(yearParam) || CURRENT_YEAR
 
+  // Fast: only Supabase queries — renders in ~200ms
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) notFound()
 
-  const { data: client, error } = await supabase
-    .from('clients').select('id, name, edrpou').eq('id', id).single()
-  if (error || !client) notFound()
+  const [clientResult, budgetResult] = await Promise.all([
+    supabase.from('clients').select('id, name, edrpou').eq('id', id).single(),
+    supabase.from('dps_cache').select('data, fetched_at')
+      .eq('client_id', id).eq('user_id', user.id).eq('data_type', 'budget').single(),
+  ])
 
-  const fetchYear = tab === 'submitted' ? CURRENT_YEAR : year
-  const { reports, total, hasToken, isMock, tokenExpired, debugError } =
-    await fetchReports(id, user.id, fetchYear, client.edrpou ?? undefined)
+  if (clientResult.error || !clientResult.data) notFound()
+  const client = clientResult.data
 
-  // Debt from cache
-  const { data: budgetCache } = await supabase
-    .from('dps_cache').select('data, fetched_at')
-    .eq('client_id', id).eq('data_type', 'budget').single()
-
-  const budget = budgetCache?.data as BudgetCalculations | null
-  const budgetDate = budgetCache?.fetched_at
-    ? new Date(budgetCache.fetched_at).toLocaleDateString('uk-UA',
+  const budget = budgetResult.data?.data as BudgetCalculations | null
+  const budgetDate = budgetResult.data?.fetched_at
+    ? new Date(budgetResult.data.fetched_at).toLocaleDateString('uk-UA',
         { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Kiev' })
     : null
   const totalDebt = (budget?.calculations ?? []).reduce((s, r) => s + (r.debt ?? 0), 0)
   const totalOverpayment = (budget?.calculations ?? []).reduce((s, r) => s + (r.overpayment ?? 0), 0)
 
-  const periodData = getPeriodRange(period)
-  const filteredReports = tab === 'submitted' && !isMock
-    ? filterByPeriod(reports, period) : reports
-
-  // Stats for submitted tab
-  const accepted   = filteredReports.filter(r => r.status === 'accepted').length
-  const rejected   = filteredReports.filter(r => r.status === 'rejected').length
-  const processing = filteredReports.filter(r => r.status === 'processing').length
-
   const tabBase = `/dashboard/client/${id}/reports`
+  const periodData = getPeriodRange(period)
 
   return (
     <div className="max-w-5xl mx-auto py-8 px-4 space-y-5">
 
-      {/* Header */}
+      {/* Header — instant */}
       <div className="flex items-start justify-between">
         <div>
-          <Link href={`/dashboard/client/${id}`} className="text-sm text-gray-400 hover:text-gray-600 transition">
-            ← Назад
+          <Link
+            href={`/dashboard/client/${id}`}
+            className="inline-flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-700 text-sm font-medium px-3 py-1.5 rounded-lg transition-all"
+          >
+            ‹ Назад
           </Link>
           <h1 className="text-2xl font-bold text-gray-900 mt-1.5">Звітність</h1>
           <p className="text-sm text-gray-500 mt-0.5">
@@ -216,7 +352,7 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
         </div>
       </div>
 
-      {/* Debt / Overpayment cards */}
+      {/* Debt / Overpayment cards — instant (from cache) */}
       {budget && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className={`col-span-2 rounded-xl px-5 py-4 ${totalDebt > 0 ? 'bg-red-50 border border-red-100' : 'bg-gray-50 border border-gray-200'}`}>
@@ -238,12 +374,12 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
         </div>
       )}
 
-      {/* Tabs */}
+      {/* Tabs — instant */}
       <div className="border-b border-gray-200">
         <nav className="flex gap-0 -mb-px">
           {[
-            { key: 'list',      label: 'По роках',     href: `${tabBase}?year=${year}&tab=list` },
-            { key: 'submitted', label: 'Здані звіти',  href: `${tabBase}?tab=submitted&period=${period}` },
+            { key: 'list',      label: 'По роках',    href: `${tabBase}?year=${year}&tab=list` },
+            { key: 'submitted', label: 'Здані звіти', href: `${tabBase}?tab=submitted&period=${period}` },
           ].map(t => (
             <Link
               key={t.key}
@@ -260,37 +396,33 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
         </nav>
       </div>
 
-      {/* ── Tab: По роках ── */}
+      {/* ── Tab: По роках — year selector instant, table via Suspense ── */}
       {tab === 'list' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex gap-1.5">
-              {YEARS.map(y => (
-                <Link key={y}
-                  href={`${tabBase}?year=${y}&tab=list`}
-                  className={`px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                    y === year
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-600'
-                  }`}
-                >
-                  {y}
-                </Link>
-              ))}
-            </div>
-            {!isMock && total > 0 && (
-              <span className="text-sm text-gray-400">{total} звітів</span>
-            )}
+          <div className="flex gap-1.5">
+            {YEARS.map(y => (
+              <Link key={y}
+                href={`${tabBase}?year=${y}&tab=list`}
+                className={`px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  y === year
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'bg-white border border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-600'
+                }`}
+              >
+                {y}
+              </Link>
+            ))}
           </div>
-          <ReportsTable reports={reports} total={total} hasToken={hasToken} isMock={isMock}
-            tokenExpired={tokenExpired} debugError={debugError} clientId={id} year={year} />
+          <Suspense fallback={<TableSkeleton />}>
+            <ReportsContent clientId={id} userId={user.id} year={year}
+              tab="list" period={period} edrpou={client.edrpou ?? undefined} />
+          </Suspense>
         </div>
       )}
 
-      {/* ── Tab: Здані звіти ── */}
+      {/* ── Tab: Здані звіти — period selector instant, stats+table via Suspense ── */}
       {tab === 'submitted' && (
         <div className="space-y-4">
-          {/* Period selector + label */}
           <div className="flex items-center justify-between">
             <div className="flex gap-1.5">
               {(['month', 'quarter', 'year'] as Period[]).map(p => (
@@ -308,30 +440,10 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
             </div>
             <span className="text-sm font-medium text-gray-600">{periodData.label}</span>
           </div>
-
-          {/* Stats row */}
-          {!isMock && filteredReports.length > 0 && (
-            <div className="grid grid-cols-4 gap-3">
-              {[
-                { label: 'Всього',     value: filteredReports.length, color: 'text-gray-800' },
-                { label: 'Прийнято',   value: accepted,               color: 'text-emerald-600' },
-                { label: 'В обробці',  value: processing,             color: 'text-blue-600'    },
-                { label: 'Відхилено',  value: rejected,               color: 'text-red-600'     },
-              ].map(s => (
-                <div key={s.label} className="bg-white rounded-xl border border-gray-200 px-4 py-3 text-center">
-                  <p className={`text-2xl font-bold tabular-nums ${s.color}`}>{s.value}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">{s.label}</p>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <ReportsTable reports={filteredReports} total={filteredReports.length}
-            hasToken={hasToken} isMock={isMock} tokenExpired={tokenExpired}
-            debugError={debugError} clientId={id} year={year}
-            emptyLabel={`Звітів за ${periodData.label.toLowerCase()} не знайдено`}
-            showFooter={false}
-          />
+          <Suspense fallback={<TableSkeleton />}>
+            <ReportsContent clientId={id} userId={user.id} year={year}
+              tab="submitted" period={period} edrpou={client.edrpou ?? undefined} />
+          </Suspense>
         </div>
       )}
     </div>
@@ -373,15 +485,17 @@ function ReportsTable({
     </div>
   )
 
-  if (isMock) return (
-    <div className="bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-sm text-gray-700">
-      <p className="font-semibold mb-1">⚠️ Не вдалося завантажити звітність</p>
-      <p>Спробуйте пізніше або відкрийте{' '}
-        <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer" className="underline">cabinet.tax.gov.ua →</a>
-      </p>
-      {debugError && <p className="mt-2 font-mono text-xs text-red-600 break-all">{debugError}</p>}
-    </div>
-  )
+  if (isMock) {
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 text-sm text-gray-700">
+        <p className="font-semibold mb-1">⚠️ Не вдалося завантажити звітність</p>
+        <p>Спробуйте пізніше або відкрийте{' '}
+          <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer" className="underline font-medium hover:text-gray-900">cabinet.tax.gov.ua →</a>
+        </p>
+        {process.env.NODE_ENV !== 'production' && debugError && <p className="mt-2 font-mono text-xs text-red-600 break-all">{debugError}</p>}
+      </div>
+    )
+  }
 
   if (reports.length === 0) return (
     <div className="bg-white rounded-xl border border-gray-200 px-6 py-14 text-center">

@@ -47,7 +47,7 @@ async function fetchDocuments(
       const taxId        = (clientEdrpou && /^\d{8}$/.test(clientEdrpou)) ? clientEdrpou : kepTaxId
       const kepAuth      = await signWithKepDecrypted(kepDecrypted, kepPass, taxId)
 
-      const res = await fetch(`${DPS_PUBLIC}/post/incoming?page=0&size=50`, {
+      const res = await fetch(`${DPS_PUBLIC}/post/incoming?page=0&size=100`, {
         headers: { Authorization: kepAuth, ...opts },
         signal: AbortSignal.timeout(10000),
         cache: 'no-store',
@@ -148,8 +148,11 @@ export default async function DocumentsPage({ params }: PageProps) {
     <div className="max-w-5xl mx-auto py-10 px-4 space-y-6">
       {/* Header */}
       <div>
-        <Link href={`/dashboard/client/${id}`} className="text-sm text-gray-400 hover:text-gray-600">
-          ← Назад
+        <Link
+          href={`/dashboard/client/${id}`}
+          className="inline-flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-700 text-sm font-medium px-3 py-1.5 rounded-lg transition-all"
+        >
+          ‹ Назад
         </Link>
         <div className="flex items-center justify-between mt-2">
           <div>

@@ -381,3 +381,4 @@ Email-нотифікації: `lib/email.ts` (fire-and-forget, не блокує
 | 2026-03 | `probe-reports` ендпоінт 404 | Старий деплой `web-gold-rho-91.vercel.app` не підключений до git; правильний домен — `dps-monitor.vercel.app` |
 | 2026-03 | Нові ЮО-клієнти (один файл КЕП) → "хибний підписант" | `from-kep/route.ts` зберігав РНОКПП у `clients.edrpou` замість ЄДРПОУ; виправлено на `kepInfo.orgTaxId ?? kepInfo.taxId` |
 | 2026-03 | Існуючі ЮО-клієнти з неправильним `edrpou` (МАРЬЯНЕНКО) | `sync/route.ts` самовиправляє: якщо `edrpou` = 10 цифр → читає `orgTaxId` з сертифікату → оновлює БД → успішно синкає |
+| 2026-03 | Vercel build failure — всі деплої падали з TypeScript помилкою | `yuoNoAccess` оголошено в типі `ReportsTable` props, але не включено в деструктурування; збірка падала з `Cannot find name 'yuoNoAccess'` |

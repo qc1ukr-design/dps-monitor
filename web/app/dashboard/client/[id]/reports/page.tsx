@@ -485,7 +485,7 @@ export default async function ReportsPage({ params, searchParams }: PageProps) {
 // ── Reports table component ───────────────────────────────────────────────────
 function ReportsTable({
   reports, total, hasToken, isMock, tokenExpired, debugError,
-  clientId, year, emptyLabel, showFooter = true,
+  yuoNoAccess, clientId, year, emptyLabel, showFooter = true,
 }: {
   reports: TaxReport[]
   total: number

@@ -39,7 +39,9 @@ async function fetchReports(
   }
 
   const url      = `${DPS_API}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
-  const urlPub   = `${DPS_PUBLIC}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
+  // Official DPS public_api endpoint for reports uses underscore: reg_doc/list (not regdoc/list)
+  // Source: https://cabinet.tax.gov.ua/help/api-registers-int.html
+  const urlPub   = `${DPS_PUBLIC}/reg_doc/list?periodYear=${year}`
   const urlA     = `${DPS_A}/regdoc/list?periodYear=${year}&page=0&size=100&sort=dget,desc`
   const opts   = { Accept: 'application/json' }
   let kepDebug = '', uuidDebug = ''

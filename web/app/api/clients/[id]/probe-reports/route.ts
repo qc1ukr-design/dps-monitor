@@ -57,7 +57,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
   const clientEdrpou = (client.edrpou ?? '').trim()
   const isYuo        = /^\d{8}$/.test(clientEdrpou)
 
-  const urlPub  = `${DPS_PUBLIC}/regdoc/list?periodYear=${YEAR}&page=0&size=20&sort=dget,desc`
+  // Official endpoint: ws/public_api/reg_doc/list (underscore, not regdoc/list)
+  const urlPub  = `${DPS_PUBLIC}/reg_doc/list?periodYear=${YEAR}`
   const urlApi  = `${DPS_API}/regdoc/list?periodYear=${YEAR}&page=0&size=20&sort=dget,desc`
 
   // ── Cert diagnosis ─────────────────────────────────────────────────────────

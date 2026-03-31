@@ -13,6 +13,17 @@ interface PageProps {
   searchParams: Promise<{ year?: string; tab?: string; period?: string }>
 }
 
+/**
+ * Returns true if all reports in the list are ФО/ФОП personal forms (F-prefix).
+ * DPS uses 'F' prefix for physical-person forms and 'J' prefix for legal-entity forms.
+ * When reg_doc/list returns only F-forms for a ЮО client, it's the director's personal
+ * data (reg_doc/list uses cert serialNumber/РНОКПП, unlike payer_card which uses
+ * organizationIdentifier). We must skip such results to avoid showing wrong data.
+ */
+function isAllFoForms(reports: TaxReport[]): boolean {
+  return reports.length > 0 && reports.every(r => r.formCode.toUpperCase().startsWith('F'))
+}
+
 const DPS_PUBLIC = 'https://cabinet.tax.gov.ua/ws/public_api'
 const DPS_API    = 'https://cabinet.tax.gov.ua/ws/api'
 const DPS_A      = 'https://cabinet.tax.gov.ua/ws/a'
@@ -22,7 +33,7 @@ async function fetchReports(
   userId: string,
   year: number,
   clientEdrpou?: string
-): Promise<ReportsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean; debugError?: string }> {
+): Promise<ReportsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean; debugError?: string; yuoNoAccess?: boolean }> {
   const supabase = await createClient()
   const { data: tokenRow } = await supabase
     .from('api_tokens')
@@ -66,8 +77,19 @@ async function fetchReports(
         headers: { Authorization: authHeader, ...opts },
         signal: AbortSignal.timeout(12000), cache: 'no-store',
       })
-      if (res.ok) return { ...normalizeReports(await res.json()), hasToken: true, isMock: false, tokenExpired: false }
-      kepDebug = `pub→${res.status}(signed=${signTaxId})`
+      if (res.ok) {
+        const result = normalizeReports(await res.json())
+        // For ЮО: reg_doc/list uses cert serialNumber (РНОКПП) not organizationIdentifier,
+        // so it returns the director's personal ФО/ФОП declarations, not org reports.
+        // Detect this: if client is ЮО and ALL returned forms are F-prefixed → wrong data → skip.
+        if (isYuo && isAllFoForms(result.reports)) {
+          kepDebug = `pub→200 ФО-only(${result.reports.map(r => r.formCode).join(',').slice(0, 80)})→skip`
+        } else {
+          return { ...result, hasToken: true, isMock: false, tokenExpired: false }
+        }
+      } else {
+        kepDebug = `pub→${res.status}(signed=${signTaxId})`
+      }
     } catch (e) { kepDebug = `pub→${String(e).slice(0, 100)}` }
 
     // 1. For ЮО: stamp cert OAuth (ЄДРПОУ-ЄДРПОУ-ts, stamp key signs ЄДРПОУ → ЮО context)
@@ -153,8 +175,15 @@ async function fetchReports(
     } catch (e) { uuidDebug = `uuid→${String(e).slice(0, 80)}` }
   }
 
-  return { reports: [], total: 0, hasToken: true, isMock: true, tokenExpired: false,
-    debugError: [kepDebug, uuidDebug].filter(Boolean).join(' | ') }
+  const isYuoClient = !!(clientEdrpou && /^\d{8}$/.test(clientEdrpou))
+  return {
+    reports: [], total: 0, hasToken: true, isMock: true, tokenExpired: false,
+    // yuoNoAccess: set when ЮО director cert cannot access org reports.
+    // reg_doc/list uses cert РНОКПП (not organizationIdentifier), so pub_api returns ФО data.
+    // OAuth ЮО formats fail if director is not in DPS authorized signatory registry.
+    yuoNoAccess: isYuoClient && kepDebug.includes('ФО-only'),
+    debugError: [kepDebug, uuidDebug].filter(Boolean).join(' | '),
+  }
 }
 
 // ── Period ───────────────────────────────────────────────────────────────────
@@ -247,7 +276,7 @@ async function ReportsContent({
   edrpou?: string
 }) {
   const fetchYear = tab === 'submitted' ? CURRENT_YEAR : year
-  const { reports, total, hasToken, isMock, tokenExpired, debugError } =
+  const { reports, total, hasToken, isMock, tokenExpired, debugError, yuoNoAccess } =
     await fetchReports(clientId, userId, fetchYear, edrpou)
 
   const periodData = getPeriodRange(period)
@@ -267,7 +296,8 @@ async function ReportsContent({
           </div>
         )}
         <ReportsTable reports={reports} total={total} hasToken={hasToken} isMock={isMock}
-          tokenExpired={tokenExpired} debugError={debugError} clientId={clientId} year={year} />
+          tokenExpired={tokenExpired} debugError={debugError} yuoNoAccess={yuoNoAccess}
+          clientId={clientId} year={year} />
       </div>
     )
   }
@@ -292,7 +322,7 @@ async function ReportsContent({
       )}
       <ReportsTable reports={filteredReports} total={filteredReports.length}
         hasToken={hasToken} isMock={isMock} tokenExpired={tokenExpired}
-        debugError={debugError} clientId={clientId} year={year}
+        debugError={debugError} yuoNoAccess={yuoNoAccess} clientId={clientId} year={year}
         emptyLabel={`Звітів за ${periodData.label.toLowerCase()} не знайдено`}
         showFooter={false}
       />
@@ -463,6 +493,7 @@ function ReportsTable({
   isMock: boolean
   tokenExpired: boolean
   debugError?: string
+  yuoNoAccess?: boolean
   clientId: string
   year: number
   emptyLabel?: string
@@ -486,6 +517,31 @@ function ReportsTable({
       <p>Оновіть у <Link href={`/dashboard/client/${clientId}/settings`} className="underline">Налаштуваннях</Link></p>
     </div>
   )
+
+  // ЮО director key limitation: reg_doc/list uses cert РНОКПП for taxpayer ID, not
+  // organizationIdentifier. OAuth ЮО access requires director to be registered as
+  // authorized signatory in the DPS system (право підпису).
+  if (isMock && yuoNoAccess) {
+    return (
+      <div className="bg-blue-50 border border-blue-200 rounded-xl px-5 py-4 text-sm text-blue-800">
+        <p className="font-semibold mb-1">Звіти юридичної особи недоступні через ключ директора</p>
+        <p className="mt-1 text-blue-700 leading-relaxed">
+          API ДПС для звітності (reg_doc/list) ідентифікує платника за РНОКПП з сертифікату,
+          а не за ЄДРПОУ організації. Щоб отримати звіти ЮО, потрібен один із варіантів:
+        </p>
+        <ul className="mt-2 space-y-1 list-disc list-inside text-blue-700">
+          <li>Завантажити <strong>печатку/штамп організації</strong> (окремий КЕП з ЄДРПОУ)</li>
+          <li>Або переглянути звіти напряму у{' '}
+            <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer"
+              className="underline font-medium hover:text-blue-900">
+              Кабінеті ДПС →
+            </a>
+            {' '}(вхід ключем директора → режим «Посадова особа»)
+          </li>
+        </ul>
+      </div>
+    )
+  }
 
   if (isMock) {
     return (

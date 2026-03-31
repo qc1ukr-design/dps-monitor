@@ -492,7 +492,7 @@ function ReportsTable({
         <p>Спробуйте пізніше або відкрийте{' '}
           <a href="https://cabinet.tax.gov.ua" target="_blank" rel="noopener noreferrer" className="underline font-medium hover:text-gray-900">cabinet.tax.gov.ua →</a>
         </p>
-        {process.env.NODE_ENV !== 'production' && debugError && <p className="mt-2 font-mono text-xs text-red-600 break-all">{debugError}</p>}
+        {debugError && <p className="mt-2 font-mono text-xs text-red-600 break-all">{debugError}</p>}
       </div>
     )
   }

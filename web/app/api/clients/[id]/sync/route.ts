@@ -7,7 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto'
-import { signWithKepDecrypted } from '@/lib/dps/signer'
+import { signWithKepDecrypted, getCertOrgTaxId } from '@/lib/dps/signer'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
 import { detectAlerts } from '@/lib/dps/alerts'
 import { sendAlertEmail } from '@/lib/email'
@@ -77,7 +77,25 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
   // The director's personal cert has РНОКПП (10 digits) as kep_tax_id,
   // but DPS requires signing the organisation's ЄДРПОУ with the director's key.
   // For ФОП / physical persons, edrpou equals the РНОКПП (or is absent) → use kep_tax_id.
-  const edrpou = client.edrpou?.trim() ?? ''
+  let edrpou = client.edrpou?.trim() ?? ''
+
+  // ── Self-heal: fix clients.edrpou if it was wrongly stored as РНОКПП (10 digits) ──
+  // Happens when a ЮО director KEP was uploaded as a single file via the old from-kep
+  // code which used kepInfo.taxId (РНОКПП) instead of kepInfo.orgTaxId (ЄДРПОУ).
+  // We detect this case and fix it transparently so the next sync already uses ЄДРПОУ.
+  if (/^\d{10}$/.test(edrpou)) {
+    try {
+      const orgTaxId = await getCertOrgTaxId(kepDecrypted, password)
+      if (orgTaxId) {
+        await supabase.from('clients').update({ edrpou: orgTaxId }).eq('id', id)
+        console.log(`[sync] self-healed edrpou for client=${id}: ${edrpou} → ${orgTaxId}`)
+        edrpou = orgTaxId
+      }
+    } catch (e) {
+      console.warn(`[sync] getCertOrgTaxId failed for client=${id}:`, e)
+    }
+  }
+
   const taxId = (edrpou && /^\d{8}$/.test(edrpou)) ? edrpou : kepTaxId
 
   console.log(`[sync] client=${id} kepTaxId=${kepTaxId} edrpou=${edrpou} → signing with=${taxId}`)

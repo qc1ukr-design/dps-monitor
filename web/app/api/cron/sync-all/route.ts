@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
   // ── Fetch all tokens with KEP ─────────────────────────────────────────────
   const { data: tokens, error: tokensError } = await supabase
     .from('api_tokens')
-    .select('client_id, user_id, kep_encrypted, kep_password_encrypted, kep_tax_id')
+    .select('client_id, user_id, kep_encrypted, kep_password_encrypted, kep_tax_id, kep_valid_to')
     .not('kep_encrypted', 'is', null)
     .not('kep_password_encrypted', 'is', null)
 
@@ -237,6 +237,80 @@ export async function GET(request: NextRequest) {
     } catch (e) {
       clientResults[clientId] = { ok: false, error: String(e) }
       errors++
+    }
+  }
+
+  // ── KEP expiry check ─────────────────────────────────────────────────────
+  // Runs after all client syncs. Checks kep_valid_to for each token and sends
+  // a warning if expiring within 30 days or already expired.
+  // Deduplication: skips if a kep_expiring/kep_expired alert was already created
+  // in the last 6 days for that client (to avoid daily spam).
+  const kepAlertClientIds = tokens
+    .filter(t => t.kep_valid_to)
+    .map(t => t.client_id)
+
+  const { data: recentKepAlerts } = kepAlertClientIds.length
+    ? await supabase
+        .from('alerts')
+        .select('client_id, type')
+        .in('client_id', kepAlertClientIds)
+        .in('type', ['kep_expiring', 'kep_expired'])
+        .gte('created_at', new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString())
+    : { data: [] }
+
+  const recentKepAlertSet = new Set(recentKepAlerts?.map(a => a.client_id) ?? [])
+  const cronNow = new Date()
+
+  for (const token of tokens) {
+    if (!token.kep_valid_to) continue
+    if (recentKepAlertSet.has(token.client_id)) continue
+
+    const validTo = new Date(token.kep_valid_to)
+    const msLeft = validTo.getTime() - cronNow.getTime()
+    const daysLeft = Math.ceil(msLeft / (24 * 60 * 60 * 1000))
+
+    let alertType: 'kep_expiring' | 'kep_expired' | null = null
+    let message = ''
+
+    const clientName = clientMap.get(token.client_id) ?? token.client_id
+    const validToStr = validTo.toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric' })
+
+    if (daysLeft <= 0) {
+      alertType = 'kep_expired'
+      message = `КЕП клієнта ${clientName} прострочено (${validToStr}). Необхідно оновити ключ.`
+    } else if (daysLeft <= 30) {
+      alertType = 'kep_expiring'
+      message = `КЕП клієнта ${clientName} закінчується через ${daysLeft} дн. (${validToStr}). Оновіть ключ завчасно.`
+    }
+
+    if (!alertType) continue
+
+    // Insert into alerts table
+    await supabase.from('alerts').insert({
+      user_id: token.user_id,
+      client_id: token.client_id,
+      type: alertType,
+      message,
+      data: { daysLeft, validTo: token.kep_valid_to },
+      is_read: false,
+    })
+    alertsCreated++
+
+    // Telegram
+    const tgChatId = userTelegramMap.get(token.user_id)
+    if (tgChatId) {
+      const icon = alertType === 'kep_expired' ? '🚫' : '🔑'
+      await sendTelegramMessage(tgChatId, `<b>ДПС-Монітор</b>\n\n${icon} ${message}`)
+    }
+
+    // Email
+    const emailAddr = userEmailMap.get(token.user_id)
+    if (emailAddr) {
+      sendAlertEmail({
+        to: emailAddr,
+        clientName,
+        alerts: [{ message }],
+      }).catch(() => { /* ignore */ })
     }
   }
 

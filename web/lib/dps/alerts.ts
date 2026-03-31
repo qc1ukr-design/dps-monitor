@@ -7,6 +7,8 @@ export type AlertType =
   | 'overpayment_changed'
   | 'status_changed'
   | 'new_document'
+  | 'kep_expiring'
+  | 'kep_expired'
 
 export interface AlertPayload {
   type: AlertType
@@ -232,6 +234,8 @@ export function alertIcon(type: AlertType): string {
     case 'overpayment_changed': return '💰'
     case 'status_changed': return '🏷️'
     case 'new_document': return '📨'
+    case 'kep_expiring': return '🔑'
+    case 'kep_expired': return '🚫'
     default: return '🔔'
   }
 }

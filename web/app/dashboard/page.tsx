@@ -89,6 +89,7 @@ export default async function DashboardPage() {
     hasKep: boolean
     kepExpired: boolean
     kepExpiringSoon: boolean
+    kepValidTo: Date | null
     lastSynced: string | null
   }
 
@@ -128,6 +129,7 @@ export default async function DashboardPage() {
       hasKep: kepClientIds.has(c.id),
       kepExpired,
       kepExpiringSoon,
+      kepValidTo,
       lastSynced,
     }
   })
@@ -222,6 +224,7 @@ export default async function DashboardPage() {
                       <th className="text-right px-4 py-3 font-medium text-gray-500 whitespace-nowrap">Борг</th>
                       <th className="text-right px-4 py-3 font-medium text-gray-500 whitespace-nowrap">Переплата</th>
                       <th className="text-left px-4 py-3 font-medium text-gray-500 whitespace-nowrap">Оновлено</th>
+                      <th className="text-left px-4 py-3 font-medium text-gray-500 whitespace-nowrap">КЕП до</th>
                       <th className="text-center px-4 py-3 font-medium text-gray-500 whitespace-nowrap">Дія</th>
                     </tr>
                   </thead>
@@ -279,6 +282,23 @@ export default async function DashboardPage() {
                             : <span className="text-amber-500">Не синхронізовано</span>}
                         </td>
 
+                        {/* KEP valid to */}
+                        <td className="px-4 py-3.5 text-xs whitespace-nowrap">
+                          {row.kepValidTo ? (
+                            <span className={
+                              row.kepExpired
+                                ? 'text-red-600 font-semibold'
+                                : row.kepExpiringSoon
+                                  ? 'text-amber-600 font-semibold'
+                                  : 'text-gray-500'
+                            }>
+                              {row.kepValidTo.toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Kiev' })}
+                            </span>
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </td>
+
                         {/* Action */}
                         <td className="px-4 py-3.5 text-center">
                           <div className="flex flex-col items-center gap-1">
@@ -329,6 +349,86 @@ export default async function DashboardPage() {
             >
               Додати контрагента
             </Link>
+          </div>
+        )}
+
+        {/* ── Section 3b: KEP expiry summary ───────────────────────────── */}
+        {hasClients && clientRows.some(r => r.kepValidTo) && (
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-3">Строки дії КЕП</h2>
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100 bg-gray-50">
+                      <th className="text-left px-5 py-3 font-medium text-gray-500 whitespace-nowrap">Контрагент</th>
+                      <th className="text-left px-4 py-3 font-medium text-gray-500 whitespace-nowrap">ЄДРПОУ</th>
+                      <th className="text-left px-4 py-3 font-medium text-gray-500 whitespace-nowrap">КЕП дійсний до</th>
+                      <th className="text-left px-4 py-3 font-medium text-gray-500 whitespace-nowrap">Статус</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {clientRows
+                      .filter(r => r.hasKep)
+                      .sort((a, b) => {
+                        // Expired first, then expiring soon, then by date ascending
+                        if (a.kepExpired && !b.kepExpired) return -1
+                        if (!a.kepExpired && b.kepExpired) return 1
+                        if (!a.kepValidTo) return 1
+                        if (!b.kepValidTo) return -1
+                        return a.kepValidTo.getTime() - b.kepValidTo.getTime()
+                      })
+                      .map((row) => {
+                        const msLeft = row.kepValidTo
+                          ? row.kepValidTo.getTime() - dashboardNow.getTime()
+                          : null
+                        const daysLeft = msLeft !== null ? Math.ceil(msLeft / (24 * 60 * 60 * 1000)) : null
+
+                        return (
+                          <tr key={row.id} className="hover:bg-blue-50/30 transition-colors">
+                            <td className="px-5 py-3">
+                              <Link href={`/dashboard/client/${row.id}/settings`} className="font-medium text-gray-900 hover:text-blue-600 transition-colors">
+                                {row.name}
+                              </Link>
+                            </td>
+                            <td className="px-4 py-3 text-gray-500 font-mono text-xs">
+                              {row.edrpou ?? <span className="text-gray-300">—</span>}
+                            </td>
+                            <td className="px-4 py-3 text-sm font-medium">
+                              {row.kepValidTo ? (
+                                <span className={
+                                  row.kepExpired
+                                    ? 'text-red-600'
+                                    : row.kepExpiringSoon
+                                      ? 'text-amber-600'
+                                      : 'text-gray-700'
+                                }>
+                                  {row.kepValidTo.toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Kiev' })}
+                                </span>
+                              ) : <span className="text-gray-300">—</span>}
+                            </td>
+                            <td className="px-4 py-3">
+                              {row.kepExpired ? (
+                                <span className="inline-flex items-center gap-1 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">
+                                  🚫 Прострочено
+                                </span>
+                              ) : row.kepExpiringSoon && daysLeft !== null ? (
+                                <span className="inline-flex items-center gap-1 text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+                                  🔑 {daysLeft} дн.
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+                                  ✓ Дійсний
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
 

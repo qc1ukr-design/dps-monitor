@@ -37,6 +37,9 @@ export default function ClientSettingsPage() {
   const [tokenError, setTokenError] = useState('')
   const [tokenSaved, setTokenSaved] = useState(false)
 
+  const [isArchived, setIsArchived] = useState(false)
+  const [archiveLoading, setArchiveLoading] = useState(false)
+
   useEffect(() => {
     fetch(`/api/clients/${id}/kep`)
       .then(r => r.json())
@@ -45,6 +48,10 @@ export default function ClientSettingsPage() {
     fetch(`/api/clients/${id}/token`)
       .then(r => r.json())
       .then(setTokenStatus)
+      .catch(() => {})
+    fetch(`/api/clients/${id}`)
+      .then(r => r.json())
+      .then(d => { if (typeof d.is_archived === 'boolean') setIsArchived(d.is_archived) })
       .catch(() => {})
   }, [id])
 
@@ -125,6 +132,25 @@ export default function ClientSettingsPage() {
     setKepPassword('')
     setSelectedFiles([])
     if (fileRef.current) fileRef.current.value = ''
+  }
+
+  async function handleArchiveToggle() {
+    const next = !isArchived
+    const msg = next
+      ? 'Архівувати контрагента? Він буде прихований з основного списку (можна розархівувати).'
+      : 'Розархівувати контрагента?'
+    if (!confirm(msg)) return
+    setArchiveLoading(true)
+    const res = await fetch(`/api/clients/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_archived: next }),
+    })
+    setArchiveLoading(false)
+    if (res.ok) {
+      if (next) router.push('/dashboard')
+      else setIsArchived(false)
+    }
   }
 
   async function handleDelete() {
@@ -384,8 +410,17 @@ export default function ClientSettingsPage() {
         </form>
       </div>
 
-      {/* Delete — subtle link, not scary red block */}
-      <div className="text-center">
+      {/* Archive / Delete */}
+      <div className="flex items-center justify-center gap-6">
+        <button
+          onClick={handleArchiveToggle}
+          disabled={archiveLoading}
+          className="text-xs text-gray-400 hover:text-amber-600 disabled:opacity-50 transition underline underline-offset-2"
+        >
+          {archiveLoading
+            ? 'Зачекайте…'
+            : isArchived ? 'Розархівувати контрагента' : 'Архівувати контрагента'}
+        </button>
         <button
           onClick={handleDelete}
           className="text-xs text-gray-400 hover:text-red-500 transition underline underline-offset-2"

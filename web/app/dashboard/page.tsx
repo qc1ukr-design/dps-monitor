@@ -91,6 +91,7 @@ export default async function DashboardPage() {
     kepExpiringSoon: boolean
     kepValidTo: Date | null
     lastSynced: string | null
+    isSyncStale: boolean
   }
 
   const clientRows: ClientRow[] = (clients ?? []).map((c) => {
@@ -119,6 +120,13 @@ export default async function DashboardPage() {
       ? (kepValidTo.getTime() - dashboardNow.getTime()) < 30 * 24 * 60 * 60 * 1000
       : false
 
+    const hasKep = kepClientIds.has(c.id)
+    // Stale: client has KEP but no sync in the last 48 hours (2 cron cycles)
+    const isSyncStale = hasKep && (
+      !lastSynced ||
+      (dashboardNow.getTime() - new Date(lastSynced).getTime()) > 48 * 60 * 60 * 1000
+    )
+
     return {
       id: c.id,
       name: c.name,
@@ -126,11 +134,12 @@ export default async function DashboardPage() {
       taxStatus,
       totalDebt,
       totalOverpayment,
-      hasKep: kepClientIds.has(c.id),
+      hasKep,
       kepExpired,
       kepExpiringSoon,
       kepValidTo,
       lastSynced,
+      isSyncStale,
     }
   })
 
@@ -230,7 +239,7 @@ export default async function DashboardPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {clientRows.map((row) => (
-                      <tr key={row.id} className="hover:bg-blue-50/30 transition-colors">
+                      <tr key={row.id} className={`transition-colors ${row.isSyncStale ? 'bg-amber-50/60 hover:bg-amber-50' : 'hover:bg-blue-50/30'}`}>
                         {/* Name */}
                         <td className="px-5 py-3.5">
                           <Link
@@ -276,10 +285,21 @@ export default async function DashboardPage() {
                         </td>
 
                         {/* Last synced */}
-                        <td className="px-4 py-3.5 text-gray-400 text-xs whitespace-nowrap">
-                          {row.lastSynced
-                            ? formatDate(row.lastSynced)
-                            : <span className="text-amber-500">Не синхронізовано</span>}
+                        <td className="px-4 py-3.5 text-xs whitespace-nowrap">
+                          {row.isSyncStale ? (
+                            <div className="flex flex-col gap-0.5">
+                              {row.lastSynced && (
+                                <span className="text-gray-400">{formatDate(row.lastSynced)}</span>
+                              )}
+                              <span className="inline-flex items-center gap-1 text-amber-700 font-medium">
+                                ⚠ Не оновлюється
+                              </span>
+                            </div>
+                          ) : row.lastSynced ? (
+                            <span className="text-gray-400">{formatDate(row.lastSynced)}</span>
+                          ) : (
+                            <span className="text-amber-500">Не синхронізовано</span>
+                          )}
                         </td>
 
                         {/* KEP valid to */}
@@ -325,6 +345,11 @@ export default async function DashboardPage() {
                             {row.kepExpiringSoon && (
                               <Link href={`/dashboard/client/${row.id}/settings`} className="text-xs text-amber-500 hover:text-amber-700 whitespace-nowrap">
                                 ⚠ КЕП закінчується
+                              </Link>
+                            )}
+                            {row.isSyncStale && !row.kepExpired && (
+                              <Link href={`/dashboard/client/${row.id}/settings`} className="text-xs text-amber-600 hover:text-amber-800 whitespace-nowrap font-medium">
+                                Перевірити КЕП
                               </Link>
                             )}
                           </div>

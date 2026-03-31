@@ -137,7 +137,7 @@ export async function GET() {
   const [clientsRes, tokenRes, cacheRes] = await Promise.all([
     supabase.from('clients').select('id, name, edrpou').eq('user_id', user.id).order('name'),
     supabase.from('api_tokens')
-      .select('client_id, kep_encrypted, kep_password_encrypted, kep_tax_id, token_encrypted')
+      .select('client_id, kep_encrypted, kep_password_encrypted, kep_tax_id, kep_valid_to, token_encrypted')
       .eq('user_id', user.id),
     supabase.from('dps_cache')
       .select('client_id, data_type, data, fetched_at')
@@ -258,12 +258,13 @@ export async function GET() {
   {
     const ws   = wb.addWorksheet('Зведений звіт')
     ws.views   = [{ state: 'frozen', ySplit: 4 }]
-    const COLS = 7
+    const COLS = 8
     addTitle(ws, 'ДПС-Монітор  ·  Зведений звіт', COLS, dateStr)
 
-    const hdr = ws.addRow(['№', 'Клієнт', 'ЄДРПОУ', 'Статус платника', 'Заборгованість, грн', 'Переплата, грн', 'Синхронізовано'])
+    const hdr = ws.addRow(['№', 'Клієнт', 'ЄДРПОУ', 'Статус платника', 'Заборгованість, грн', 'Переплата, грн', 'Синхронізовано', 'КЕП дійсний до'])
     styleHeader(hdr, COLS)
 
+    const excelNow = new Date()
     let totDebt = 0, totOvr = 0
     clients.forEach((c, i) => {
       const { profile, budget, lastSynced } = byClient.get(c.id)!
@@ -271,7 +272,18 @@ export async function GET() {
       const ovr  = (budget?.calculations ?? []).reduce((s, r) => s + (r.overpayment ?? 0), 0)
       totDebt += debt; totOvr += ovr
 
-      const row = ws.addRow([i + 1, c.name, c.edrpou ?? '', profile?.status ?? '', null, null, fmtDate(lastSynced)])
+      const tok = tokenMap.get(c.id)
+      const kepValidToStr = tok?.kep_valid_to ?? null
+      const kepValidTo = kepValidToStr ? new Date(kepValidToStr) : null
+      const kepExpired = kepValidTo ? kepValidTo < excelNow : false
+      const kepExpiringSoon = !kepExpired && kepValidTo
+        ? (kepValidTo.getTime() - excelNow.getTime()) < 30 * 24 * 60 * 60 * 1000
+        : false
+      const kepDisplay = kepValidTo
+        ? kepValidTo.toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Kiev' })
+        : '—'
+
+      const row = ws.addRow([i + 1, c.name, c.edrpou ?? '', profile?.status ?? '', null, null, fmtDate(lastSynced), kepDisplay])
       styleData(row, i % 2 === 1, COLS)
       row.getCell(1).alignment = { horizontal: 'center' }
       row.getCell(2).font      = { bold: true, size: 10, name: 'Calibri' }
@@ -280,10 +292,21 @@ export async function GET() {
       row.getCell(7).font      = { size: 9, color: { argb: C.gray }, name: 'Calibri' }
       moneyCell(row.getCell(5), round2(debt), 'debt')
       moneyCell(row.getCell(6), round2(ovr),  'ovr')
+      const kepCell = row.getCell(8)
+      kepCell.alignment = { horizontal: 'center', vertical: 'middle' }
+      if (kepExpired) {
+        kepCell.fill = fill(C.redBg)
+        kepCell.font = { bold: true, color: { argb: C.redFg }, size: 10, name: 'Calibri' }
+      } else if (kepExpiringSoon) {
+        kepCell.fill = fill('FFFFF7ED')  // amber-50
+        kepCell.font = { bold: true, color: { argb: 'FFB45309' }, size: 10, name: 'Calibri' }  // amber-700
+      } else {
+        kepCell.font = { size: 9, color: { argb: C.gray }, name: 'Calibri' }
+      }
     })
 
     ws.addRow([]).height = 4
-    const tot = ws.addRow(['', 'РАЗОМ', '', '', round2(totDebt), round2(totOvr), ''])
+    const tot = ws.addRow(['', 'РАЗОМ', '', '', round2(totDebt), round2(totOvr), '', ''])
     styleTotals(tot, COLS)
     tot.getCell(5).numFmt    = '# ##0.00'
     tot.getCell(5).alignment = { horizontal: 'right' }
@@ -300,6 +323,7 @@ export async function GET() {
       { width: 22 },
       { width: 20 },
       { width: 22 },
+      { width: 18 },
     ]
   }
 

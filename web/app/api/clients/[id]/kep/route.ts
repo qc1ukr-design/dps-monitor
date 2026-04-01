@@ -10,7 +10,6 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { encrypt } from '@/lib/crypto'
 import { inspectKepWithCert, inspectKepFiles, CERT_EXTS } from '@/lib/dps/signer'
 
 interface RouteParams {
@@ -136,48 +135,40 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     )
   }
 
-  // Encrypt KEP data
-  const kepEncrypted = encrypt(kepStorageValue)
-  const kepPasswordEncrypted = encrypt(password)
+  // Delegate encryption and storage to backend (KMS envelope encryption)
+  const backendUrl = process.env.BACKEND_URL
+  if (!backendUrl) return NextResponse.json({ error: 'BACKEND_URL is not configured' }, { status: 500 })
 
-  // Update or insert api_tokens row
-  const { data: existing } = await supabase
-    .from('api_tokens')
-    .select('id')
-    .eq('client_id', id)
-    .eq('user_id', user.id)
-    .single()
+  const backendSecret = process.env.BACKEND_API_SECRET
+  if (!backendSecret) return NextResponse.json({ error: 'BACKEND_API_SECRET is not configured' }, { status: 500 })
 
-  const kepFields = {
-    kep_encrypted: kepEncrypted,
-    kep_password_encrypted: kepPasswordEncrypted,
-    kep_ca_name: kepInfo.caName,
-    kep_owner_name: kepInfo.ownerName,
-    kep_valid_to: kepInfo.validTo || null,
-    kep_tax_id: kepInfo.taxId,
-    updated_at: new Date().toISOString(),
-  }
+  const backendRes = await fetch(`${backendUrl}/kep/upload`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Backend-Secret': backendSecret,
+    },
+    body: JSON.stringify({
+      clientId: id,
+      userId: user.id,
+      kepData: kepStorageValue,
+      password,
+      kepInfo: {
+        caName: kepInfo.caName,
+        ownerName: kepInfo.ownerName,
+        orgName: kepInfo.orgName || undefined,
+        taxId: kepInfo.taxId,
+        validTo: kepInfo.validTo || null,
+      },
+    }),
+  })
 
-  const { error } = existing
-    ? await supabase
-        .from('api_tokens')
-        .update(kepFields)
-        .eq('client_id', id)
-        .eq('user_id', user.id)
-    : await supabase
-        .from('api_tokens')
-        .insert({ client_id: id, user_id: user.id, ...kepFields })
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-
-  // Try to persist kep_org_name (requires migration 004 — silently skip if column missing)
-  if (kepInfo.orgName) {
-    await supabase
-      .from('api_tokens')
-      .update({ kep_org_name: kepInfo.orgName } as Record<string, string>)
-      .eq('client_id', id)
-      .eq('user_id', user.id)
-      // ignore error — column may not exist yet
+  if (!backendRes.ok) {
+    const body = await backendRes.json().catch(() => ({}))
+    return NextResponse.json(
+      { error: (body as { error?: string }).error ?? 'Backend KEP upload failed' },
+      { status: 500 }
+    )
   }
 
   return NextResponse.json({ ok: true, kepInfo })

@@ -6,7 +6,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { decrypt } from '@/lib/crypto'
+import { backendGetKep } from '@/lib/backend'
 import { signWithKepDecrypted, getCertOrgTaxId, getCertValidTo } from '@/lib/dps/signer'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
 import { detectAlerts } from '@/lib/dps/alerts'
@@ -46,24 +46,26 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
     .single()
   if (!client) return NextResponse.json({ error: 'Client not found' }, { status: 404 })
 
-  // Load token row
+  // Load token metadata (tax ID + validity — no encrypted fields needed)
   const { data: tokenRow } = await supabase
     .from('api_tokens')
-    .select('kep_encrypted, kep_password_encrypted, kep_tax_id, kep_valid_to')
+    .select('kep_tax_id, kep_valid_to')
     .eq('client_id', id)
     .eq('user_id', user.id)
+    .not('kep_encrypted', 'is', null)
     .single()
 
-  if (!tokenRow?.kep_encrypted || !tokenRow?.kep_password_encrypted) {
+  if (!tokenRow) {
     return NextResponse.json({ error: 'KEP not configured for this client' }, { status: 400 })
   }
 
-  // Decrypt KEP
+  // Fetch and decrypt KEP via backend (supports KMS envelope + legacy AES)
   let kepDecrypted: string
   let password: string
   try {
-    kepDecrypted = decrypt(tokenRow.kep_encrypted)
-    password = decrypt(tokenRow.kep_password_encrypted)
+    const kep = await backendGetKep(id, user.id)
+    kepDecrypted = kep.kepData
+    password = kep.password
   } catch (e) {
     return NextResponse.json({ error: 'Failed to decrypt KEP', detail: String(e) }, { status: 500 })
   }

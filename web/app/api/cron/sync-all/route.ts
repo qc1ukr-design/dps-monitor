@@ -9,7 +9,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { decrypt } from '@/lib/crypto'
+import { backendGetKep } from '@/lib/backend'
 import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
 import { detectAlerts, detectDocumentAlerts, alertIcon } from '@/lib/dps/alerts'
@@ -49,9 +49,8 @@ export async function GET(request: NextRequest) {
   // ── Fetch all tokens with KEP ─────────────────────────────────────────────
   const { data: tokens, error: tokensError } = await supabase
     .from('api_tokens')
-    .select('client_id, user_id, kep_encrypted, kep_password_encrypted, kep_tax_id, kep_valid_to')
+    .select('client_id, user_id, kep_tax_id, kep_valid_to')
     .not('kep_encrypted', 'is', null)
-    .not('kep_password_encrypted', 'is', null)
 
   if (tokensError) {
     return NextResponse.json({ error: tokensError.message }, { status: 500 })
@@ -98,9 +97,8 @@ export async function GET(request: NextRequest) {
     const clientName = clientMap.get(clientId) ?? clientId
 
     try {
-      // Decrypt KEP
-      const kepDecrypted = decrypt(token.kep_encrypted)
-      const password = decrypt(token.kep_password_encrypted)
+      // Fetch and decrypt KEP via backend
+      const { kepData: kepDecrypted, password } = await backendGetKep(clientId, userId)
       const taxId = token.kep_tax_id?.trim() ?? ''
       if (!taxId) { errors++; continue }
 

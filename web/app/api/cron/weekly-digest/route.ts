@@ -167,9 +167,15 @@ export async function GET(request: NextRequest) {
       }
 
     lines.push(``, `<a href="https://dps-monitor.vercel.app/dashboard">Перейти на дашборд →</a>`)
-    await sendTelegramMessage(tgChatId, lines.join('\n')).catch(() => { /* ignore */ })
+    let tgError: string | null = null
+    try {
+      await sendTelegramMessage(tgChatId, lines.join('\n'))
+    } catch (e) {
+      tgError = String(e)
+    }
 
     digestsSent++
+    console.log(`[digest] userId=${userId} tgChatId=${tgChatId} tgError=${tgError} issues=${debtClients.length + staleClients.length + kepIssueClients.length}`)
   }
 
   return NextResponse.json({ ok: true, digestsSent })

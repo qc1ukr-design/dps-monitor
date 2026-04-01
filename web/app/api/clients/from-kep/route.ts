@@ -9,7 +9,6 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { encrypt } from '@/lib/crypto'
 import { inspectKepFiles, inspectKepWithCert, CERT_EXTS } from '@/lib/dps/signer'
 
 function getExt(filename: string): string {
@@ -114,27 +113,38 @@ export async function POST(request: NextRequest) {
     kepStorageValue = files[0].base64
   }
 
-  const kepEncrypted = encrypt(kepStorageValue)
-  const kepPasswordEncrypted = encrypt(password)
+  // Encrypt KEP via backend (KMS envelope encryption)
+  const backendUrl = process.env.BACKEND_URL?.trim()
+  const backendSecret = process.env.BACKEND_API_SECRET?.trim()
+  if (!backendUrl || !backendSecret) {
+    await supabase.from('clients').delete().eq('id', client.id)
+    return NextResponse.json({ error: 'Backend not configured' }, { status: 500 })
+  }
 
-  const { error: tokenError } = await supabase
-    .from('api_tokens')
-    .insert({
-      client_id: client.id,
-      user_id: user.id,
-      kep_encrypted: kepEncrypted,
-      kep_password_encrypted: kepPasswordEncrypted,
-      kep_ca_name: kepInfo.caName,
-      kep_owner_name: kepInfo.ownerName,
-      kep_valid_to: kepInfo.validTo || null,
-      kep_tax_id: kepInfo.taxId,
-      updated_at: new Date().toISOString(),
-    })
+  const backendRes = await fetch(`${backendUrl}/kep/upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Backend-Secret': backendSecret },
+    body: JSON.stringify({
+      clientId: client.id,
+      userId: user.id,
+      kepData: kepStorageValue,
+      password,
+      kepInfo: {
+        caName: kepInfo.caName,
+        ownerName: kepInfo.ownerName,
+        validTo: kepInfo.validTo || null,
+        taxId: kepInfo.taxId,
+        orgName: kepInfo.orgName || null,
+      },
+    }),
+    signal: AbortSignal.timeout(15000),
+  })
 
-  if (tokenError) {
+  if (!backendRes.ok) {
+    const err = await backendRes.json().catch(() => ({})) as Record<string, unknown>
     // Roll back client
     await supabase.from('clients').delete().eq('id', client.id)
-    return NextResponse.json({ error: tokenError.message }, { status: 500 })
+    return NextResponse.json({ error: (err.error as string) || 'Failed to store KEP' }, { status: 500 })
   }
 
   // Try to persist kep_org_name (requires migration 004 — silently skip if column missing)

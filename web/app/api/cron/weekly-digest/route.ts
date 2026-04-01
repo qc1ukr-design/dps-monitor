@@ -166,7 +166,7 @@ export async function GET(request: NextRequest) {
         lines.push(``, `✅ Все гаразд — борги та проблеми відсутні`)
       }
 
-    lines.push(``, `<a href="https://dps-monitor.vercel.app/dashboard">Перейти на дашборд →</a>`)
+    lines.push(``, `<a href="https://web-qc1ukr-designs-projects.vercel.app/dashboard">Перейти на дашборд →</a>`)
     await sendTelegramMessage(tgChatId, lines.join('\n')).catch(() => { /* ignore */ })
 
     digestsSent++

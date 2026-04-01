@@ -1,6 +1,6 @@
 # DPS-Monitor — Технічна документація
 
-> Останнє оновлення: 2026-04-01 (сесія 3)
+> Останнє оновлення: 2026-04-01 (сесія 4)
 
 ---
 
@@ -84,7 +84,7 @@ DPS-Monitor/
 - `kep_encrypted` — зашифрований КЕП; підтримується два формати (auto-detect у backend):
   - **KMS envelope** (новий): base64(JSON `{ version:1, encryptedDek, iv, tag, ciphertext }`)
   - **Legacy AES** (старий): hex рядок `iv:tag:ciphertext` (AES-256-GCM, ключ `ENCRYPTION_KEY`)
-- `kep_password_encrypted` — зашифрований пароль КЕП (legacy AES; нові записи зберігають пароль всередині KMS envelope разом з КЕП)
+- `kep_password_encrypted` — зашифрований пароль КЕП окремим KMS envelope (так само як `kep_encrypted`); backend читає і пише обидва поля незалежно
 - `kep_tax_id` — **завжди РНОКПП** (serialNumber з сертифікату); використовується для підписання OAuth
 - `token_encrypted` — UUID Bearer-токен (альтернативний метод, сесійний)
 
@@ -535,10 +535,9 @@ Telegram-тільки (email не використовується — RESEND_AP
 
 | Змінна | Призначення |
 |---|---|
-| `ENCRYPTION_KEY` | Legacy AES ключ (старі записи у БД; нові шифруються через KMS) |
 | `NEXT_PUBLIC_SUPABASE_URL` | URL Supabase проєкту |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key Supabase |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (для cron/server-side) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Publishable key Supabase (`sb_publishable_...`, замінює legacy JWT anon key) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Secret key Supabase (`sb_secret_...`, замінює legacy JWT service_role; для cron/server-side) |
 | `BACKEND_URL` | URL backend-сервісу на Railway (`https://dps-monitor-production.up.railway.app`) |
 | `BACKEND_API_SECRET` | Спільний секрет для `X-Backend-Secret` header (64 hex символи) |
 | `EMAIL_FROM` / `RESEND_API_KEY` | Email-нотифікації (необов'язково — якщо не задано, email тихо пропускається) |
@@ -555,9 +554,9 @@ Telegram-тільки (email не використовується — RESEND_AP
 | `AWS_REGION` | `eu-central-1` |
 | `AWS_KMS_KEY_ID` | ARN або alias CMK (`alias/dps-monitor-kep`) |
 | `SUPABASE_URL` | URL Supabase проєкту |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (для upsert/select `api_tokens`) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Secret key Supabase (`sb_secret_...`, для upsert/select `api_tokens`) |
 
-> ⚠️ Ніколи не комітити `.env` з реальними значеннями. Всі секрети зберігаються виключно в Railway Dashboard і Vercel Environment Variables.
+> ⚠️ Ніколи не комітити `.env` з реальними значеннями. Всі секрети зберігаються виключно в Railway Dashboard і Vercel Environment Variables. `.gitignore` блокує всі варіанти `.env` і `.env.local` рекурсивно.
 
 ---
 
@@ -586,3 +585,49 @@ Telegram-тільки (email не використовується — RESEND_AP
 | 2026-04-01 | `sendTelegramMessage` — видима помилка | Тепер кидає `Error(Telegram ${status}: ...)` на non-2xx замість тихого ігнорування |
 | 2026-04-01 | **Міграція КЕП на AWS KMS** | Створено CMK `dps-monitor-kep` (eu-central-1, Symmetric). IAM user з мінімальними правами (тільки `kms:Encrypt/Decrypt/GenerateDataKey` на цей ARN). Backend (`kmsClient.ts`, `kms.ts`, `routes/kep.ts`) реалізує envelope encryption. Web делегує encrypt/decrypt backend через `backendGetKep()` і `POST /kep/upload`. Auto-detect формату у backend: KMS envelope (base64 JSON v1) або legacy AES (hex). Міграція даних не потрібна — обидва формати читаються прозоро. |
 | 2026-04-01 | **End-to-end верифікація KMS** | `GET /kms/test` → `{success:true, checks:{generateDataKey,encrypt,decrypt}: "ok"}`. Реальний KEP (legacy AES у БД) успішно розшифрований через backend auto-detect. Cron `sync-all`: 6/6 клієнтів синхронізовано, errors: 0. |
+| 2026-04-01 | **Міграція KEP AES → KMS (всі записи)** | `scripts/migrate-kep-to-kms.mjs` — 6/6 `kep_encrypted` записів перемігровано на KMS envelope encryption. `token_encrypted` очищено (NULL). `from-kep/route.ts` рефакторено: encrypt тепер виключно через backend (`POST /kep/upload`), пряме AES (`encrypt()`) видалено. |
+| 2026-04-01 | **Ротація всіх витоклих секретів** | Виявлено `.env.local` з реальними секретами у git-репозиторії. Ротовано (всі платформи): `CRON_SECRET`, `TOKEN_ENCRYPTION_KEY`, `TELEGRAM_BOT_TOKEN`. `NEXT_PUBLIC_SUPABASE_ANON_KEY` → новий publishable key `sb_publishable_...`. `SUPABASE_SERVICE_ROLE_KEY` → новий secret key `sb_secret_...`. `.gitignore` розширено для блокування всіх варіантів `.env`. Vercel і Railway перезапущені з новими змінними. |
+
+---
+
+## 17. Поточний стан системи (станом на 2026-04-01, кінець сесії 4)
+
+### ✅ Повністю завершено і стабільно
+
+| Область | Стан |
+|---|---|
+| **Шифрування КЕП** | 100% KMS envelope encryption. Всі 6 записів у БД мігровано. Legacy AES більше не використовується для нових записів. |
+| **Backend (Railway)** | Express.js сервіс запущений. KMS connectivity підтверджено (`/kms/test`). Авто-деплой при push у `backend/**`. |
+| **Синхронізація (cron)** | `sync-all` щодня о 04:00 UTC. Остання перевірка: 6/6 клієнтів OK, 0 помилок. |
+| **Алерти** | Борг, статус, нові документи, КЕП expiry (30 днів), stale sync (48 год) — всі типи реалізовані та задеплоєні. |
+| **Telegram-нотифікації** | Бот `8716647020` активний. Щоденні алерти + тижневий дайджест (пн 08:00 UTC). |
+| **Dashboard** | Таблиця з фільтрами/сортуванням/архівом. Колонка "КЕП до" з кольоровим індикатором. |
+| **Excel-експорт** | 8 колонок у зведеному звіті, включаючи "КЕП дійсний до" з кольором. |
+| **Безпека секретів** | Всі секрети ротовано після виявлення витоку. `.gitignore` захищає від повторення. Supabase мігровано на новий формат ключів (`sb_publishable_` / `sb_secret_`). |
+
+### 🌐 Продакшн URL
+
+| Сервіс | URL | Статус |
+|---|---|---|
+| Web (Vercel) | `https://web-gold-rho-91.vercel.app` | ✅ Online |
+| Backend (Railway) | `https://dps-monitor-production.up.railway.app` | ✅ Online |
+| Supabase | `https://zvvvgjmyecabhugvkyjz.supabase.co` | ✅ Active |
+
+> **Примітка:** `dps-monitor.vercel.app` — аліас, який вказує на виробничий деплой. Основний прямий URL — `web-gold-rho-91.vercel.app`. Обидва функціонально ідентичні.
+
+### 🔑 Поточні ключі (формат, не значення)
+
+| Ключ | Формат | Де зберігається |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `sb_publishable_...` (новий Supabase формат) | Vercel |
+| `SUPABASE_SERVICE_ROLE_KEY` | `sb_secret_...` (новий Supabase формат) | Vercel + Railway |
+| `TELEGRAM_BOT_TOKEN` | `8716647020:AAE...` (ротовано 2026-04-01) | Vercel |
+| `CRON_SECRET` | 64 hex символи (ротовано 2026-04-01) | Vercel + Railway |
+| `TOKEN_ENCRYPTION_KEY` | 64 hex символи (ротовано 2026-04-01) | Vercel + Railway |
+| `AWS_KMS_KEY_ID` | `arn:aws:kms:eu-central-1:826496717510:key/17fd8a9a-...` | Railway |
+
+### 💡 Можливі наступні кроки (не обов'язкові)
+
+- **`kep_password_encrypted`** — колонка активно використовується backend (читання + запис); _не видаляти_. Якщо потрібно — окремий рефакторинг: об'єднати в один envelope з `kep_encrypted`.
+- **npm вразливості** — 3 з 7 виправлено (`npm audit fix`). Решта 4 потребують Next.js 14→16 (breaking); відкладено.
+- **Нові функції** — за потребою замовника

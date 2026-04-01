@@ -33,23 +33,23 @@ export default async function DashboardPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  // Fetch all clients (including archived)
+  // Fetch all clients
   const { data: clients } = await supabase
     .from('clients')
-    .select('id, name, edrpou, is_archived')
+    .select('id, name, edrpou')
     .eq('user_id', user.id)
     .order('name', { ascending: true })
 
   const clientIds = clients?.map(c => c.id) ?? []
 
-  // Fetch cache and KEP tokens in parallel
+  // Fetch cache (profile + budget + archive_flag) and KEP tokens in parallel
   const [cacheResult, tokenResult] = await Promise.all([
     clientIds.length
       ? supabase
           .from('dps_cache')
           .select('client_id, data_type, data, fetched_at')
           .in('client_id', clientIds)
-          .in('data_type', ['profile', 'budget'])
+          .in('data_type', ['profile', 'budget', 'archive_flag'])
       : { data: [] },
     clientIds.length
       ? supabase
@@ -98,7 +98,8 @@ export default async function DashboardPage() {
       (now.getTime() - new Date(lastSynced).getTime()) > 48 * 60 * 60 * 1000
     )
 
-    const isArchived = (c as { is_archived?: boolean }).is_archived ?? false
+    const archiveRow = cacheRows.find(r => r.client_id === c.id && r.data_type === 'archive_flag')
+    const isArchived = (archiveRow?.data as { archived?: boolean } | null)?.archived ?? false
 
     return {
       id: c.id,

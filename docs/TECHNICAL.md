@@ -1,6 +1,6 @@
 # DPS-Monitor — Технічна документація
 
-> Останнє оновлення: 2026-04-01
+> Останнє оновлення: 2026-04-01 (сесія 3)
 
 ---
 
@@ -10,8 +10,10 @@
 
 - **Фронтенд / SSR:** Next.js 14 (App Router), TypeScript, Tailwind CSS
 - **База даних / Auth:** Supabase (PostgreSQL + Auth)
-- **Деплой:** Vercel (`dps-monitor.vercel.app`) — підключений до репо `qc1ukr-design/dps-monitor`
-- **Крипто:** бібліотека `jkurwa` (ДСТУ 4145, CAdES-BES) для роботи з КЕП
+- **Деплой web:** Vercel (`dps-monitor.vercel.app`) — підключений до репо `qc1ukr-design/dps-monitor`
+- **Backend:** Express.js (Node.js, TypeScript) — деплой на Railway (`dps-monitor-production.up.railway.app`); watchPatterns `["backend/**"]` → авто-деплой при push
+- **Крипто КЕП:** бібліотека `jkurwa` (ДСТУ 4145, CAdES-BES) для підписання
+- **Шифрування даних КЕП:** AWS KMS (CMK `dps-monitor-kep`, eu-central-1) — envelope encryption
 
 > ⚠️ **Важливо:** `web-gold-rho-91.vercel.app` — старий ізольований деплой, **не підключений до GitHub**. Усі нові коміти йдуть тільки на `dps-monitor.vercel.app`.
 
@@ -21,14 +23,14 @@
 
 ```
 DPS-Monitor/
-├── web/                          # Next.js застосунок
+├── web/                          # Next.js застосунок (Vercel)
 │   ├── app/
 │   │   ├── api/clients/[id]/
 │   │   │   ├── route.ts          # GET/DELETE клієнта
-│   │   │   ├── sync/             # POST — синхронізація з ДПС (payer_card + ta/splatp)
-│   │   │   ├── kep/              # GET — інфо про завантажений КЕП
+│   │   │   ├── sync/             # POST — синхронізація з ДПС
+│   │   │   ├── kep/              # POST upload / GET info КЕП
 │   │   │   ├── token/            # POST — збереження UUID-токена
-│   │   │   ├── documents/        # GET — вхідні документи (post/incoming)
+│   │   │   ├── documents/        # GET — вхідні документи
 │   │   │   └── probe-reports/    # GET — діагностичний ендпоінт (debug)
 │   │   ├── api/cron/             # Автоматична синхронізація (Vercel Cron)
 │   │   ├── api/sync-all/         # POST — синхронізація всіх клієнтів
@@ -40,13 +42,26 @@ DPS-Monitor/
 │   │           ├── reports/      # Звітність (reg_doc/list)
 │   │           ├── documents/    # Вхідні документи (post/incoming)
 │   │           └── settings/     # Налаштування: КЕП, UUID-токен
-│   └── lib/dps/
-│       ├── signer.ts             # Підписання КЕП, читання сертифікату
-│       ├── dps-auth.ts           # OAuth2 авторизація (всі методи)
-│       ├── normalizer.ts         # Нормалізація відповідей ДПС API
-│       ├── alerts.ts             # Логіка алертів (порівняння кешу)
-│       ├── types.ts              # TypeScript типи
-│       └── mock-data.ts          # Моковані дані для dev
+│   └── lib/
+│       ├── backend.ts            # HTTP-клієнт до backend (backendGetKep)
+│       └── dps/
+│           ├── signer.ts         # Підписання КЕП, читання сертифікату
+│           ├── dps-auth.ts       # OAuth2 авторизація (всі методи)
+│           ├── normalizer.ts     # Нормалізація відповідей ДПС API
+│           ├── alerts.ts         # Логіка алертів (порівняння кешу)
+│           ├── types.ts          # TypeScript типи
+│           └── mock-data.ts      # Моковані дані для dev
+├── backend/                      # Express.js сервіс (Railway)
+│   └── src/
+│       ├── lib/
+│       │   ├── kmsClient.ts      # Низькорівневий AWS KMS (encrypt/decrypt/generateDataKey)
+│       │   ├── kms.ts            # Envelope encryption (kmsEncrypt/kmsDecrypt/serialize)
+│       │   └── aes.ts            # Legacy AES decrypt (iv:tag:ciphertext hex)
+│       ├── routes/
+│       │   ├── kep.ts            # POST /kep/upload, GET /kep/:clientId
+│       │   └── kms.ts            # GET /kms/test (перевірка KMS connectivity)
+│       └── middleware/
+│           └── auth.ts           # requireApiSecret (X-Backend-Secret header)
 ├── supabase/                     # Міграції БД
 └── docs/
     ├── TECHNICAL.md              # Цей файл
@@ -61,12 +76,15 @@ DPS-Monitor/
 |---|---|
 | `clients` | Клієнти (id, name, edrpou, user_id) |
 | `api_tokens` | КЕП та UUID-токени, зашифровані AES |
-| `dps_cache` | Кеш відповідей ДПС (profile, budget, profile_raw) |
-| `alerts` | Алерти про зміни (борг, статус, нові документи) |
+| `dps_cache` | Кеш відповідей ДПС (profile, budget, documents, archive_flag) |
+| `alerts` | Алерти про зміни (борг, статус, нові документи, КЕП, stale sync) |
+| `user_settings` | Налаштування користувача (telegram_chat_id, notify_telegram) |
 
 **Поля `api_tokens`:**
-- `kep_encrypted` — зашифрований КЕП (pfx/jks у base64 або JSON v2-формат)
-- `kep_password_encrypted` — зашифрований пароль КЕП
+- `kep_encrypted` — зашифрований КЕП; підтримується два формати (auto-detect у backend):
+  - **KMS envelope** (новий): base64(JSON `{ version:1, encryptedDek, iv, tag, ciphertext }`)
+  - **Legacy AES** (старий): hex рядок `iv:tag:ciphertext` (AES-256-GCM, ключ `ENCRYPTION_KEY`)
+- `kep_password_encrypted` — зашифрований пароль КЕП (legacy AES; нові записи зберігають пароль всередині KMS envelope разом з КЕП)
 - `kep_tax_id` — **завжди РНОКПП** (serialNumber з сертифікату); використовується для підписання OAuth
 - `token_encrypted` — UUID Bearer-токен (альтернативний метод, сесійний)
 
@@ -322,7 +340,88 @@ if (/^\d{10}$/.test(info.taxId)) {
 
 ---
 
-## 11. Нормалізація відповідей DPS API
+## 11. Backend-сервіс (Railway) і шифрування КЕП через AWS KMS
+
+### 11.1 Архітектура
+
+Весь процес зберігання і розшифрування КЕП-даних делегований окремому Express-сервісу на Railway. Web (Vercel) ніколи не шифрує і не розшифровує КЕП самостійно — тільки звертається до backend через HTTP.
+
+```
+[Web / Vercel]  →  POST /kep/upload  →  [Backend / Railway]  →  AWS KMS CMK  →  Supabase
+[Web / Vercel]  →  GET /kep/:id      →  [Backend / Railway]  →  AWS KMS CMK  →  Supabase
+```
+
+Аутентифікація між web і backend: заголовок `X-Backend-Secret` (спільний секрет `BACKEND_API_SECRET`).
+
+### 11.2 AWS KMS — налаштування
+
+| Параметр | Значення |
+|---|---|
+| Тип ключа | Symmetric, SYMMETRIC_DEFAULT (AES-256-GCM) |
+| Alias | `dps-monitor-kep` |
+| Регіон | `eu-central-1` |
+| IAM user | Мінімальні права: тільки `kms:Encrypt`, `kms:Decrypt`, `kms:GenerateDataKey` на конкретний Key ARN |
+
+### 11.3 Envelope Encryption
+
+KMS не шифрує дані напряму (обмеження AWS: max 4 KB). Використовується envelope encryption:
+
+1. `GenerateDataKey` → отримуємо **DEK** (Data Encryption Key) у двох видах: plaintext + encrypted
+2. Шифруємо КЕП-дані локально через AES-256-GCM за допомогою plaintext DEK
+3. Зберігаємо в БД: `encryptedDek` (зашифрований KMS) + `iv` + `tag` + `ciphertext`
+4. Plaintext DEK не зберігається ніде
+
+**Структура KMS envelope (після `serializeEnvelope()` → base64 JSON):**
+```json
+{
+  "version": 1,
+  "encryptedDek": "<base64>",
+  "iv": "<base64>",
+  "tag": "<base64>",
+  "ciphertext": "<base64>"
+}
+```
+
+### 11.4 Auto-detect: KMS envelope vs legacy AES
+
+Функція `isKmsEnvelope(stored: string): boolean` у `backend/src/routes/kep.ts`:
+```typescript
+function isKmsEnvelope(stored: string): boolean {
+  try {
+    const decoded = Buffer.from(stored, 'base64').toString('utf8')
+    const parsed = JSON.parse(decoded)
+    return parsed?.version === 1
+  } catch {
+    return false
+  }
+}
+```
+
+`decryptStored(stored)` маршрутизує до `kmsDecrypt` або `aesDecrypt` автоматично. Міграція даних не потрібна — обидва формати читаються прозоро.
+
+### 11.5 Backend API
+
+| Метод | Шлях | Опис |
+|---|---|---|
+| `POST` | `/kep/upload` | Приймає `{ clientId, userId, kepData, password, kepInfo }`. KMS-шифрує, upsert у `api_tokens` |
+| `GET` | `/kep/:clientId?userId=` | Читає з БД, auto-detect формат, розшифровує, повертає `{ kepData, password }` |
+| `GET` | `/kms/test` | Перевіряє KMS connectivity: `generateDataKey` + `encrypt` + `decrypt`. Захищений `X-Backend-Secret` |
+
+### 11.6 `web/lib/backend.ts`
+
+```typescript
+export async function backendGetKep(clientId: string, userId: string): Promise<{ kepData: string; password: string }>
+```
+
+Використовується у:
+- `web/app/api/clients/[id]/sync/route.ts`
+- `web/app/api/cron/sync-all/route.ts`
+
+Timeout: 10 секунд. Кидає `Error` при non-2xx або timeout.
+
+---
+
+## 12. Нормалізація відповідей DPS API
 
 DPS повертає дані у двох форматах:
 
@@ -354,28 +453,115 @@ DPS повертає дані у двох форматах:
 
 Логіка в `lib/dps/alerts.ts`. Порівнює `oldProfile`/`oldBudget` з `newProfile`/`newBudget` після синку.
 
-Типи алертів: зміна боргу, нова переплата, зміна статусу платника, нові вхідні документи.
+**Типи алертів (`AlertType`):**
+
+| Тип | Опис | Дедуплікація |
+|---|---|---|
+| `debt_change` | Зміна суми боргу | — |
+| `overpayment` | Нова переплата | — |
+| `status_change` | Зміна статусу платника | — |
+| `new_document` | Новий вхідний документ | — |
+| `kep_expiring` | КЕП закінчується (< 30 днів) | 6 днів |
+| `kep_expired` | КЕП прострочено | 6 днів |
+| `sync_stale` | Синхронізація не виконується > 48 год | 6 днів |
 
 Email-нотифікації: `lib/email.ts` (fire-and-forget, не блокує синк).
+Telegram-нотифікації: `lib/telegram.ts` — кидає помилку при non-2xx від Telegram API.
 
 Детальна політика: `docs/ALERT_POLICY.md`.
 
 ---
 
-## 13. Змінна середовища
+## 13. Dashboard — фільтри, сортування, архів
 
-| Змінна | Призначення |
-|---|---|
-| `ENCRYPTION_KEY` | AES ключ для шифрування КЕП та токенів у БД |
-| `NEXT_PUBLIC_SUPABASE_URL` | URL Supabase проєкту |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key Supabase |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (для cron/server-side) |
-| `EMAIL_FROM` / `RESEND_API_KEY` | Email-нотифікації |
-| `CRON_SECRET` | Секрет для захисту cron-ендпоінту |
+### 13.1 ClientsTable (`web/app/dashboard/clients-table.tsx`)
+
+`'use client'` компонент з `useMemo` для фільтрації/сортування:
+- **Пошук** за назвою клієнта (рядок пошуку)
+- **Швидкі фільтри** (таблетки): Всі / З боргом / Не оновлюються
+- **Сортування** по колонках: назва, борг, остання синхронізація, КЕП до
+- **Архівні клієнти** виведені окремою секцією внизу з кнопкою розархівування
+
+### 13.2 Архівування клієнтів
+
+Архів зберігається в `dps_cache` без змін DDL:
+```
+data_type = 'archive_flag'
+data      = { "archived": true }
+```
+
+**API:** `PATCH /api/clients/[id]`
+- `{ is_archived: true }` → upsert рядка `archive_flag` в `dps_cache`
+- `{ is_archived: false }` → delete рядка `archive_flag` з `dps_cache`
+
+Сторінка налаштувань клієнта (`/dashboard/client/[id]/settings`) містить кнопку "Архівувати / Розархівувати контрагента". При архівуванні — перенаправляє на `/dashboard`.
+
+### 13.3 Stale sync detection у UI
+
+`isSyncStale = hasKep && (!lastSynced || вік > 48 год)` — рядок підсвічується бурштиновим кольором у таблиці.
 
 ---
 
-## 14. Хронологія ключових рішень
+## 14. Cron-задачі (`vercel.json`)
+
+| Шлях | Розклад | Опис |
+|---|---|---|
+| `/api/cron/sync-all` | `0 4 * * *` | Щоденно о 04:00 UTC — синхронізація всіх клієнтів з ДПС, генерація алертів, перевірка КЕП і stale sync |
+| `/api/cron/weekly-digest` | `0 8 * * 1` | Щопонеділка о 08:00 UTC (11:00 Київ) — тижневий дайджест у Telegram |
+
+### 14.1 sync-all (`/api/cron/sync-all`)
+
+Для кожного клієнта з KEP:
+1. Викликає backend `GET /kep/:clientId` → отримує розшифрований КЕП і пароль; підписує, отримує `payer_card` + `ta/splatp` + `post/incoming`
+2. Порівнює з кешем → вставляє алерти в `alerts`
+3. Відправляє Telegram + email якщо є нові алерти
+4. Перевіряє `kep_valid_to` → `kep_expiring`/`kep_expired` алерти (дедуп 6 днів)
+5. Для клієнтів, що не синхронізувались > 48 год → `sync_stale` алерт (дедуп 6 днів)
+
+### 14.2 weekly-digest (`/api/cron/weekly-digest`)
+
+Для кожного користувача з `notify_telegram = true`:
+- Збирає активних (не архівованих) клієнтів
+- Будує три списки: клієнти з боргом > 1 грн / з stale sync / з KEP < 30 днів
+- Відправляє Telegram-повідомлення з HTML-форматуванням та посиланням на dashboard
+
+Telegram-тільки (email не використовується — RESEND_API_KEY необов'язковий).
+
+---
+
+## 15. Змінні середовища
+
+### 15.1 Web (Vercel)
+
+| Змінна | Призначення |
+|---|---|
+| `ENCRYPTION_KEY` | Legacy AES ключ (старі записи у БД; нові шифруються через KMS) |
+| `NEXT_PUBLIC_SUPABASE_URL` | URL Supabase проєкту |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key Supabase |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (для cron/server-side) |
+| `BACKEND_URL` | URL backend-сервісу на Railway (`https://dps-monitor-production.up.railway.app`) |
+| `BACKEND_API_SECRET` | Спільний секрет для `X-Backend-Secret` header (64 hex символи) |
+| `EMAIL_FROM` / `RESEND_API_KEY` | Email-нотифікації (необов'язково — якщо не задано, email тихо пропускається) |
+| `TELEGRAM_BOT_TOKEN` | Токен Telegram-бота для нотифікацій |
+| `CRON_SECRET` | Секрет для захисту cron-ендпоінтів (`Authorization: Bearer <secret>`) |
+
+### 15.2 Backend (Railway)
+
+| Змінна | Призначення |
+|---|---|
+| `BACKEND_API_SECRET` | Той самий секрет, що у Vercel — перевіряється в `requireApiSecret` middleware |
+| `AWS_ACCESS_KEY_ID` | IAM user з правами тільки на KMS операції |
+| `AWS_SECRET_ACCESS_KEY` | Secret для IAM user |
+| `AWS_REGION` | `eu-central-1` |
+| `AWS_KMS_KEY_ID` | ARN або alias CMK (`alias/dps-monitor-kep`) |
+| `SUPABASE_URL` | URL Supabase проєкту |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (для upsert/select `api_tokens`) |
+
+> ⚠️ Ніколи не комітити `.env` з реальними значеннями. Всі секрети зберігаються виключно в Railway Dashboard і Vercel Environment Variables.
+
+---
+
+## 16. Хронологія ключових рішень
 
 | Дата | Проблема | Рішення |
 |---|---|---|
@@ -393,3 +579,10 @@ Email-нотифікації: `lib/email.ts` (fire-and-forget, не блокує
 | 2026-04-01 | Dashboard: колонка "КЕП до" | У таблиці контрагентів додано колонку "КЕП до" з кольоровим індикатором (червоний=прострочено, помаранчевий=< 30 днів). Окрему секцію "Строки дії КЕП" видалено — достатньо колонки в основній таблиці |
 | 2026-04-01 | Excel: колонка "КЕП дійсний до" у зведеному звіті | Sheet 1 "Зведений звіт" розширено до 8 колонок; додано "КЕП дійсний до" з кольоровим заливанням (червоний/помаранчевий) за тим самим правилом < 30 днів |
 | 2026-04-01 | Виправлення `kep_valid_to = null` | `extractCertInfo` читала `cert.validity.notAfter` (ASN.1 об'єкт `{ type, value }`) замість `cert.valid.to` (Unix timestamp). Виправлено на `cert.valid.{from,to}`. Додано `getCertValidTo()` + backfill у sync/route.ts для вже існуючих клієнтів |
+| 2026-04-01 | Dashboard: фільтри, сортування, архів | Новий `clients-table.tsx` (`'use client'`) з пошуком, фільтр-таблетками та сортуванням по колонках. Архів без DDL — через `dps_cache` з `data_type='archive_flag'`. Кнопка архівування у налаштуваннях клієнта. |
+| 2026-04-01 | Stale sync алерт у cron | `sync-all` після основного циклу перевіряє клієнтів що не синхронізувались > 48 год → `sync_stale` алерт + Telegram + email (дедуп 6 днів) |
+| 2026-04-01 | Тижневий Telegram-дайджест | Новий ендпоінт `/api/cron/weekly-digest` (Пн 08:00 UTC). Збирає борги/stale/KEP проблеми по кожному користувачу → Telegram HTML. Email не використовується (RESEND_API_KEY відсутній у проєкті). |
+| 2026-04-01 | `dps-monitor.vercel.app` вказував на старий деплой | Аліас `dps-monitor.vercel.app` вказував на `dps-monitor-3vsmv7bob` (ізольований старий). Виправлено: `vercel alias set web-h6c8nrpfe-... dps-monitor.vercel.app` |
+| 2026-04-01 | `sendTelegramMessage` — видима помилка | Тепер кидає `Error(Telegram ${status}: ...)` на non-2xx замість тихого ігнорування |
+| 2026-04-01 | **Міграція КЕП на AWS KMS** | Створено CMK `dps-monitor-kep` (eu-central-1, Symmetric). IAM user з мінімальними правами (тільки `kms:Encrypt/Decrypt/GenerateDataKey` на цей ARN). Backend (`kmsClient.ts`, `kms.ts`, `routes/kep.ts`) реалізує envelope encryption. Web делегує encrypt/decrypt backend через `backendGetKep()` і `POST /kep/upload`. Auto-detect формату у backend: KMS envelope (base64 JSON v1) або legacy AES (hex). Міграція даних не потрібна — обидва формати читаються прозоро. |
+| 2026-04-01 | **End-to-end верифікація KMS** | `GET /kms/test` → `{success:true, checks:{generateDataKey,encrypt,decrypt}: "ok"}`. Реальний KEP (legacy AES у БД) успішно розшифрований через backend auto-detect. Cron `sync-all`: 6/6 клієнтів синхронізовано, errors: 0. |

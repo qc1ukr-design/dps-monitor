@@ -11,7 +11,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { normalizeBudget } from '@/lib/dps/normalizer'
 import type { BudgetCalculations } from '@/lib/dps/types'
-import { sendWeeklyDigest } from '@/lib/email'
 import { sendTelegramMessage } from '@/lib/telegram'
 
 export async function GET(request: NextRequest) {
@@ -56,16 +55,8 @@ export async function GET(request: NextRequest) {
   const cacheRows   = cacheRes.data   ?? []
   const archivedIds = new Set((archiveRes.data ?? []).map(r => r.client_id))
 
-  // ── User contact lookup ───────────────────────────────────────────────────
-  const userEmailMap    = new Map<string, string>()
+  // ── Telegram contact lookup ───────────────────────────────────────────────
   const userTelegramMap = new Map<string, string>()
-
-  for (const uid of uniqueUserIds) {
-    try {
-      const { data: { user } } = await supabase.auth.admin.getUserById(uid)
-      if (user?.email) userEmailMap.set(uid, user.email)
-    } catch { /* skip */ }
-  }
 
   const { data: settings } = await supabase
     .from('user_settings')
@@ -82,9 +73,8 @@ export async function GET(request: NextRequest) {
   let digestsSent = 0
 
   for (const userId of uniqueUserIds) {
-    const emailAddr = userEmailMap.get(userId)
-    const tgChatId  = userTelegramMap.get(userId)
-    if (!emailAddr && !tgChatId) continue
+    const tgChatId = userTelegramMap.get(userId)
+    if (!tgChatId) continue
 
     // Active (non-archived) clients belonging to this user
     const userClients = allClients.filter(c => c.user_id === userId && !archivedIds.has(c.id))
@@ -143,21 +133,8 @@ export async function GET(request: NextRequest) {
       weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric',
     })
 
-    // ── Send email ────────────────────────────────────────────────────────
-    if (emailAddr) {
-      await sendWeeklyDigest({
-        to: emailAddr,
-        generatedAt,
-        totalClients: userClients.length,
-        debtClients,
-        staleClients,
-        kepIssueClients,
-      }).catch(() => { /* ignore email errors */ })
-    }
-
     // ── Send Telegram ─────────────────────────────────────────────────────
-    if (tgChatId) {
-      const lines: string[] = [
+    const lines: string[] = [
         `<b>📊 Тижневий звіт ДПС-Монітор</b>`,
         `${generatedAt}`,
         ``,
@@ -189,9 +166,8 @@ export async function GET(request: NextRequest) {
         lines.push(``, `✅ Все гаразд — борги та проблеми відсутні`)
       }
 
-      lines.push(``, `<a href="https://dps-monitor.com.ua/dashboard">Перейти на дашборд →</a>`)
-      await sendTelegramMessage(tgChatId, lines.join('\n')).catch(() => { /* ignore */ })
-    }
+    lines.push(``, `<a href="https://dps-monitor.vercel.app/dashboard">Перейти на дашборд →</a>`)
+    await sendTelegramMessage(tgChatId, lines.join('\n')).catch(() => { /* ignore */ })
 
     digestsSent++
   }

@@ -20,12 +20,22 @@ mobile/web-build/
 *.mobileprovision
 *.orig.*
 
-# Environment variables
+# Environment variables — НІКОЛИ не комітити реальні значення
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+# All .env variants in subdirectories
+**/.env
+**/.env.local
+**/.env.*.local
+**/env.local
+# Vercel pulled env files
+web/.env.vercel.*
+web/.env.prod*
+web/.env.local.*
+backend/.env
 
 # Logs
 npm-debug.log*

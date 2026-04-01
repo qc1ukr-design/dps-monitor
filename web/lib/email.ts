@@ -29,7 +29,7 @@ export async function sendAlertEmail(payload: AlertEmailPayload): Promise<void> 
         ${bulletList}
       </ul>
       <p style="margin-top:24px">
-        <a href="https://web-qc1ukr-designs-projects.vercel.app/dashboard/alerts"
+        <a href="https://dps-monitor.vercel.app/dashboard/alerts"
            style="background:#2563eb;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:500">
           Переглянути алерти →
         </a>
@@ -159,7 +159,7 @@ export async function sendWeeklyDigest(payload: WeeklyDigestPayload): Promise<vo
         ${sections.join('\n')}
 
         <p style="margin-top:28px;text-align:center">
-          <a href="https://web-qc1ukr-designs-projects.vercel.app/dashboard"
+          <a href="https://dps-monitor.vercel.app/dashboard"
              style="background:#2563eb;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">
             Перейти на дашборд →
           </a>

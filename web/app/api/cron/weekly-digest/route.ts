@@ -71,6 +71,7 @@ export async function GET(request: NextRequest) {
 
   // ── Build digest per user ─────────────────────────────────────────────────
   let digestsSent = 0
+  const debugLog: Record<string, unknown>[] = []
 
   for (const userId of uniqueUserIds) {
     const tgChatId = userTelegramMap.get(userId)
@@ -175,8 +176,8 @@ export async function GET(request: NextRequest) {
     }
 
     digestsSent++
-    console.log(`[digest] userId=${userId} tgChatId=${tgChatId} tgError=${tgError} issues=${debtClients.length + staleClients.length + kepIssueClients.length}`)
+    debugLog.push({ userId, tgChatId, tgError, issues: debtClients.length + staleClients.length + kepIssueClients.length, clients: userClients.length })
   }
 
-  return NextResponse.json({ ok: true, digestsSent })
+  return NextResponse.json({ ok: true, digestsSent, _debug: debugLog })
 }

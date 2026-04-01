@@ -314,6 +314,82 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // ── Stale sync check ────────────────────────────────────────────────────
+  // After syncs complete, check which clients still haven't been updated in
+  // over 48 hours. Alert once per 6 days (same dedup pattern as KEP alerts).
+  const staleClientIds = clientIds.filter(id => {
+    const res = clientResults[id] as { ok: boolean } | undefined
+    // Only flag clients that FAILED the current sync (succeeded ones are fresh)
+    return res && !res.ok
+  })
+
+  if (staleClientIds.length > 0) {
+    // Get latest fetched_at per client from dps_cache
+    const { data: cacheTimestamps } = await supabase
+      .from('dps_cache')
+      .select('client_id, fetched_at')
+      .in('client_id', staleClientIds)
+      .in('data_type', ['profile', 'budget'])
+
+    // Max fetched_at per client
+    const lastSyncMap = new Map<string, string>()
+    for (const row of cacheTimestamps ?? []) {
+      const prev = lastSyncMap.get(row.client_id)
+      if (!prev || row.fetched_at > prev) lastSyncMap.set(row.client_id, row.fetched_at)
+    }
+
+    // Deduplicate: skip if sync_stale alert already sent in last 6 days
+    const { data: recentStaleAlerts } = await supabase
+      .from('alerts')
+      .select('client_id')
+      .in('client_id', staleClientIds)
+      .eq('type', 'sync_stale')
+      .gte('created_at', new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString())
+
+    const recentStaleSet = new Set(recentStaleAlerts?.map(a => a.client_id) ?? [])
+
+    for (const token of tokens.filter(t => staleClientIds.includes(t.client_id))) {
+      if (recentStaleSet.has(token.client_id)) continue
+
+      const lastSynced = lastSyncMap.get(token.client_id) ?? null
+      if (!lastSynced) continue // never synced — skip (no baseline)
+
+      const msAgo = cronNow.getTime() - new Date(lastSynced).getTime()
+      const daysAgo = Math.floor(msAgo / (24 * 60 * 60 * 1000))
+      if (msAgo < 48 * 60 * 60 * 1000) continue // less than 48h — not stale yet
+
+      const clientName = clientMap.get(token.client_id) ?? token.client_id
+      const lastSyncedStr = new Date(lastSynced).toLocaleDateString('uk-UA', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+      })
+      const message = `${clientName}: синхронізація не виконується ${daysAgo} дн. (остання: ${lastSyncedStr}). Перевірте КЕП.`
+
+      await supabase.from('alerts').insert({
+        user_id: token.user_id,
+        client_id: token.client_id,
+        type: 'sync_stale',
+        message,
+        data: { daysAgo, lastSynced },
+        is_read: false,
+      })
+      alertsCreated++
+
+      const tgChatId = userTelegramMap.get(token.user_id)
+      if (tgChatId) {
+        await sendTelegramMessage(tgChatId, `<b>ДПС-Монітор</b>\n\n⚠️ ${message}`)
+      }
+
+      const emailAddr = userEmailMap.get(token.user_id)
+      if (emailAddr) {
+        sendAlertEmail({
+          to: emailAddr,
+          clientName,
+          alerts: [{ message }],
+        }).catch(() => { /* ignore */ })
+      }
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     synced,

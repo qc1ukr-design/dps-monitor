@@ -1,0 +1,14 @@
+{
+  "installCommand": "npm install",
+  "buildCommand": "npm run build",
+  "crons": [
+    {
+      "path": "/api/cron/sync-all",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/weekly-digest",
+      "schedule": "0 8 * * 1"
+    }
+  ]
+}

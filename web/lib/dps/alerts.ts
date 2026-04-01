@@ -9,6 +9,7 @@ export type AlertType =
   | 'new_document'
   | 'kep_expiring'
   | 'kep_expired'
+  | 'sync_stale'
 
 export interface AlertPayload {
   type: AlertType
@@ -236,6 +237,7 @@ export function alertIcon(type: AlertType): string {
     case 'new_document': return '📨'
     case 'kep_expiring': return '🔑'
     case 'kep_expired': return '🚫'
+    case 'sync_stale': return '⚠️'
     default: return '🔔'
   }
 }

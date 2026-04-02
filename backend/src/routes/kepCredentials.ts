@@ -7,6 +7,7 @@ import {
   decryptKepByClientId,
   deleteKep,
   listKeps,
+  KepNotFoundError,
 } from '../services/kepEncryptionService.js'
 import { getSupabaseClient } from '../lib/supabase.js'
 
@@ -93,9 +94,36 @@ router.post('/upload', authMiddleware, async (req: Request, res: Response): Prom
     return
   }
 
+  // Ownership assumption: the caller (web/app/api/clients/[id]/kep/route.ts) verifies that
+  // clientId belongs to userId via `.eq('user_id', user.id)` on the clients table before
+  // calling this endpoint. This backend route trusts that contract. There is no DB-level FK
+  // enforcing client_id ↔ user_id on kep_credentials; see decryptKepByClientId() for details.
+
   if (!/^\d{8,10}$/.test(edrpou)) {
     res.status(400).json({ error: 'edrpou має містити 8 цифр (ЄДРПОУ) або 10 цифр (РНОКПП)' })
     return
+  }
+
+  // Validate optional kepInfo fields — informational only, but validTo is parsed by alerts logic
+  if (kepInfo !== undefined && kepInfo !== null) {
+    const strOrNull = (v: unknown): v is string | null | undefined =>
+      v === null || v === undefined || typeof v === 'string'
+    if (
+      !strOrNull(kepInfo.caName)    ||
+      !strOrNull(kepInfo.ownerName) ||
+      !strOrNull(kepInfo.orgName)   ||
+      !strOrNull(kepInfo.taxId)
+    ) {
+      res.status(400).json({ error: 'kepInfo fields must be strings or null' })
+      return
+    }
+    // validTo must be a valid ISO 8601 date string when provided
+    if (kepInfo.validTo != null) {
+      if (typeof kepInfo.validTo !== 'string' || isNaN(Date.parse(kepInfo.validTo))) {
+        res.status(400).json({ error: 'kepInfo.validTo must be a valid ISO date string' })
+        return
+      }
+    }
   }
 
   try {
@@ -225,6 +253,10 @@ router.delete('/:kepId', authMiddleware, async (req: Request, res: Response): Pr
     await deleteKep(kepId, userId)
     res.json({ ok: true })
   } catch (err) {
+    if (err instanceof KepNotFoundError) {
+      res.status(404).json({ error: 'КЕП не знайдено' })
+      return
+    }
     console.error('[kep-credentials] delete error:', err instanceof Error ? err.message : String(err))
     res.status(500).json({ error: 'Помилка видалення КЕП' })
   }

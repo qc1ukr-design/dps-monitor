@@ -387,6 +387,15 @@ export async function decryptKep(kepId: string, userId: string): Promise<Decrypt
  *
  * Used by the sync flow which only knows clientId, not kepId.
  * Throws if no active kep_credentials row exists for this client.
+ *
+ * Ownership invariant: the SELECT filters on BOTH client_id AND user_id, so a row
+ * can only be found when it was originally written with user_id matching the caller.
+ * The application layer (encryptKep / POST /upload) is responsible for ensuring
+ * that client_id belongs to userId — verified via the `clients` table query in the
+ * web API route before any insert. There is no DB-level cross-column FK enforcing
+ * this; it is an application-enforced invariant. If a future migration or admin
+ * script inserts rows without this check, the double WHERE clause here still prevents
+ * cross-user data access at read time.
  */
 export async function decryptKepByClientId(clientId: string, userId: string): Promise<DecryptedKep> {
   const supabase = getSupabaseClient()
@@ -513,6 +522,13 @@ export async function activateKep(kepId: string, clientId: string | null, userId
   // Success path: encryptKep() already wrote an UPLOAD success audit log entry.
   // Logging a second UPLOAD success here would create duplicate entries per normal upload
   // cycle. Failures are logged above to capture the "uploaded but not activated" state.
+  //
+  // Known audit gap (N-3): if activateKep() is called standalone (e.g. to re-activate a
+  // previously stored but inactive KEP, without a preceding encryptKep()), the success path
+  // leaves no trace in kep_access_log. In the current application this scenario does not
+  // occur — the only callers are POST /upload and POST /api/kep/upload, both of which call
+  // encryptKep() first. If standalone re-activation is ever added, introduce an ACTIVATE
+  // action to the audit log enum (requires a DB migration for kep_access_log.action).
 }
 
 /**

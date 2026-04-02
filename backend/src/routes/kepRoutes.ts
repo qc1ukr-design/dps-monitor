@@ -142,12 +142,8 @@ router.post(
         isActive:      false,
       })
 
-      if (clientId) {
-        await activateKep(credential.id, clientId, userId)
-      } else {
-        // No clientId — activate directly (first KEP, no old one to deactivate)
-        await activateKep(credential.id, '', userId)
-      }
+      // Pass clientId (or null) — the atomic function skips deactivation when null
+      await activateKep(credential.id, clientId || null, userId)
 
       res.status(201).json({
         id:         credential.id,

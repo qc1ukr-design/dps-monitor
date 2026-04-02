@@ -15,10 +15,10 @@ export function errorHandler(
   // Log full details server-side (Railway logs) — never expose internals to the client
   console.error(`[error] ${status} — ${err.message}`, err.stack)
 
-  // Return a generic message to the client — no stack traces, no internal details
-  const clientMessage = status < 500
-    ? (err.message ?? 'Bad request')
-    : 'Internal server error'
+  // Return a generic message to the client — no stack traces, no internal details.
+  // Route handlers already send explicit safe 4xx messages; anything reaching
+  // this handler must never expose err.message (may contain DB schema / AWS ARNs).
+  const clientMessage = status < 500 ? 'Bad request' : 'Internal server error'
 
   res.status(status).json({ error: clientMessage })
 }

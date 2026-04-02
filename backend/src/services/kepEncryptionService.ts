@@ -268,7 +268,7 @@ export async function decryptKep(kepId: string, userId: string): Promise<Decrypt
       .eq('id', kepId)
       .eq('user_id', userId)
       .eq('is_active', true)
-      .single()
+      .maybeSingle()
 
     if (error || !data) {
       throw new Error('KEP not found or not active')
@@ -419,24 +419,16 @@ export async function deleteKep(kepId: string, userId: string): Promise<void> {
  * If this step fails the new KEP remains inactive and the old one stays active,
  * so the client is never left without a working KEP.
  */
-export async function activateKep(kepId: string, clientId: string, userId: string): Promise<void> {
+export async function activateKep(kepId: string, clientId: string | null, userId: string): Promise<void> {
   const supabase = getSupabaseClient()
 
-  // Deactivate all currently active KEPs for this client
-  await supabase
-    .from('kep_credentials')
-    .update({ is_active: false })
-    .eq('client_id', clientId)
-    .eq('user_id', userId)
-    .eq('is_active', true)
-    .neq('id', kepId)
-
-  // Activate the new KEP
-  const { error } = await supabase
-    .from('kep_credentials')
-    .update({ is_active: true })
-    .eq('id', kepId)
-    .eq('user_id', userId)
+  // Both UPDATEs execute atomically inside the PostgreSQL function (migration 007).
+  // If activation fails, the old KEP remains active — client is never left without a KEP.
+  const { error } = await supabase.rpc('activate_kep_atomic', {
+    p_kep_id:    kepId,
+    p_client_id: clientId || null,
+    p_user_id:   userId,
+  })
 
   if (error) {
     throw new Error(`Failed to activate KEP: ${error.message}`)

@@ -11,6 +11,23 @@ import {
 
 const router = Router()
 
+// UUID v4 format — guards against malformed / injected userId values
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function isValidUuid(v: unknown): v is string {
+  return typeof v === 'string' && UUID_RE.test(v)
+}
+
+/**
+ * Read userId from the X-User-Id request header.
+ * Returns undefined when the header is absent or not a valid UUID.
+ */
+function getUserId(req: Request): string | undefined {
+  const value = req.headers['x-user-id']
+  const userId = Array.isArray(value) ? value[0] : value
+  return isValidUuid(userId) ? userId : undefined
+}
+
 // ---------------------------------------------------------------------------
 // POST /kep-credentials/upload
 // ---------------------------------------------------------------------------
@@ -45,6 +62,16 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
     return
   }
 
+  if (!isValidUuid(clientId)) {
+    res.status(400).json({ error: 'clientId must be a valid UUID' })
+    return
+  }
+
+  if (!isValidUuid(userId)) {
+    res.status(400).json({ error: 'userId must be a valid UUID' })
+    return
+  }
+
   try {
     // Safe KEP replacement — 3 steps so the client is never left without an active KEP:
     //
@@ -62,7 +89,7 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
       isActive: false,
     })
 
-    // Step 2 & 3: Deactivate old KEP(s), then activate the new one.
+    // Step 2 & 3: Deactivate old KEP(s), then activate the new one (atomic via RPC).
     //             If this fails, the new KEP is inactive and the old one stays active.
     await activateKep(credential.id, clientId, userId)
 
@@ -80,15 +107,14 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
  * Decrypt and return the active KEP for a given client.
  * Used by the sync flow — returns the same shape as GET /kep/:clientId.
  *
- * Query params:
- *   userId — UUID of the Supabase user
+ * Header: X-User-Id — UUID of the Supabase user
  */
 router.get('/by-client/:clientId', async (req: Request, res: Response): Promise<void> => {
   const { clientId } = req.params
-  const { userId } = req.query as { userId?: string }
+  const userId = getUserId(req)
 
   if (!userId) {
-    res.status(400).json({ error: 'userId query param is required' })
+    res.status(400).json({ error: 'X-User-Id header must be a valid UUID' })
     return
   }
 
@@ -116,15 +142,14 @@ router.get('/by-client/:clientId', async (req: Request, res: Response): Promise<
 /**
  * Decrypt and return a KEP by its own ID.
  *
- * Query params:
- *   userId — UUID of the Supabase user
+ * Header: X-User-Id — UUID of the Supabase user
  */
 router.get('/:kepId', async (req: Request, res: Response): Promise<void> => {
   const { kepId } = req.params
-  const { userId } = req.query as { userId?: string }
+  const userId = getUserId(req)
 
   if (!userId) {
-    res.status(400).json({ error: 'userId query param is required' })
+    res.status(400).json({ error: 'X-User-Id header must be a valid UUID' })
     return
   }
 
@@ -151,15 +176,14 @@ router.get('/:kepId', async (req: Request, res: Response): Promise<void> => {
 /**
  * Hard-delete a KEP credential (audit log preserved).
  *
- * Query params:
- *   userId — UUID of the Supabase user
+ * Header: X-User-Id — UUID of the Supabase user
  */
 router.delete('/:kepId', async (req: Request, res: Response): Promise<void> => {
   const { kepId } = req.params
-  const { userId } = req.query as { userId?: string }
+  const userId = getUserId(req)
 
   if (!userId) {
-    res.status(400).json({ error: 'userId query param is required' })
+    res.status(400).json({ error: 'X-User-Id header must be a valid UUID' })
     return
   }
 
@@ -178,14 +202,13 @@ router.delete('/:kepId', async (req: Request, res: Response): Promise<void> => {
 /**
  * List metadata for all active KEP credentials of a user (no blobs).
  *
- * Query params:
- *   userId — UUID of the Supabase user
+ * Header: X-User-Id — UUID of the Supabase user
  */
 router.get('/', async (req: Request, res: Response): Promise<void> => {
-  const { userId } = req.query as { userId?: string }
+  const userId = getUserId(req)
 
   if (!userId) {
-    res.status(400).json({ error: 'userId query param is required' })
+    res.status(400).json({ error: 'X-User-Id header must be a valid UUID' })
     return
   }
 

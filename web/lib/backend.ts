@@ -64,6 +64,7 @@ export async function backendUploadKepCredential(params: {
     headers: {
       'X-Backend-Secret': secret,
       'Content-Type': 'application/json',
+      'X-User-Id': params.userId,
     },
     body: JSON.stringify(params),
     cache: 'no-store',

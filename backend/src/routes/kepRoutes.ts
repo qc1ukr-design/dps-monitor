@@ -71,6 +71,27 @@ const upload = multer({
   limits:  { fileSize: 5 * 1024 * 1024 },
 })
 
+/** Wraps upload.single() to convert MulterError into proper HTTP responses. */
+function multerSingle(fieldName: string): RequestHandler {
+  return (req, res, next) => {
+    upload.single(fieldName)(req, res, (err) => {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          res.status(413).json({ error: 'Файл перевищує максимальний розмір 5 MB' })
+          return
+        }
+        res.status(400).json({ error: err.message })
+        return
+      }
+      if (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) })
+        return
+      }
+      next()
+    })
+  }
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/kep/upload
 // ---------------------------------------------------------------------------
@@ -79,7 +100,7 @@ router.post(
   '/upload',
   uploadRateLimit,
   authMiddleware,
-  upload.single('file'),
+  multerSingle('file'),
   async (req: Request, res: Response): Promise<void> => {
     const userId = res.locals.userId as string
 

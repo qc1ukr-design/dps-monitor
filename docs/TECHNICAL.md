@@ -1,6 +1,6 @@
 # DPS-Monitor — Технічна документація
 
-> Останнє оновлення: 2026-04-01 (сесія 4)
+> Останнє оновлення: 2026-04-02 (сесія 5)
 
 ---
 
@@ -57,6 +57,8 @@ DPS-Monitor/
 │       │   ├── kmsClient.ts      # Низькорівневий AWS KMS (encrypt/decrypt/generateDataKey)
 │       │   ├── kms.ts            # Envelope encryption (kmsEncrypt/kmsDecrypt/serialize)
 │       │   └── aes.ts            # Legacy AES decrypt (iv:tag:ciphertext hex)
+│       ├── services/
+│       │   └── kepEncryptionService.ts  # Envelope encryption сервіс для kep_credentials
 │       ├── routes/
 │       │   ├── kep.ts            # POST /kep/upload, GET /kep/:clientId
 │       │   └── kms.ts            # GET /kms/test (перевірка KMS connectivity)
@@ -75,10 +77,12 @@ DPS-Monitor/
 | Таблиця | Призначення |
 |---|---|
 | `clients` | Клієнти (id, name, edrpou, user_id) |
-| `api_tokens` | КЕП та UUID-токени, зашифровані AES |
+| `api_tokens` | КЕП та UUID-токени (legacy + KMS envelope encryption) |
 | `dps_cache` | Кеш відповідей ДПС (profile, budget, documents, archive_flag) |
 | `alerts` | Алерти про зміни (борг, статус, нові документи, КЕП, stale sync) |
 | `user_settings` | Налаштування користувача (telegram_chat_id, notify_telegram) |
+| `kep_credentials` | Зашифровані КЕП-файли (міграція 005, envelope encryption per-KEP DEK) |
+| `kep_access_log` | Аудит-лог операцій з КЕП (UPLOAD/USE_FOR_DPS/DELETE/VIEW_LIST) |
 
 **Поля `api_tokens`:**
 - `kep_encrypted` — зашифрований КЕП; підтримується два формати (auto-detect у backend):
@@ -419,6 +423,65 @@ export async function backendGetKep(clientId: string, userId: string): Promise<{
 
 Timeout: 10 секунд. Кидає `Error` при non-2xx або timeout.
 
+### 11.7 `backend/src/services/kepEncryptionService.ts` — Envelope Encryption сервіс
+
+Реалізує повний цикл збереження/читання КЕП для таблиці `kep_credentials` (міграція 005). Відрізняється від `routes/kep.ts` (який пише в `api_tokens`): новий сервіс — окрема таблиця з окремим DEK на кожен КЕП.
+
+**Публічний API:**
+
+| Функція | Опис |
+|---|---|
+| `encryptKep(params)` | Генерує DEK, шифрує файл і пароль окремо, зануляє DEK, записує в `kep_credentials`. Повертає `KepCredential` (метадані, без blob-ів) |
+| `decryptKep(kepId, userId)` | Розшифровує DEK через KMS, розшифровує KEP + пароль, зануляє DEK, повертає `{ kepFileBuffer, kepPassword, cleanup }` |
+| `deleteKep(kepId, userId)` | Hard delete з перевіркою ownership; аудит-лог зберігається (`ON DELETE SET NULL`) |
+| `listKeps(userId)` | SELECT тільки метаданих (без blob-ів); повертає `KepMetadata[]` |
+
+**Схема шифрування:**
+
+```
+encryptKep():
+  KMS.generateDataKey() → { DEK plaintext, DEK encrypted }
+  aesGcmEncrypt(kepFileBuffer, DEK) → encrypted_kep_blob
+  aesGcmEncrypt(password,     DEK) → encrypted_password_blob
+  DEK.fill(0)                       ← знищення в пам'яті
+  INSERT kep_credentials(blobs, encrypted_dek, kms_key_id, metadata)
+
+decryptKep():
+  SELECT WHERE id=kepId AND user_id=userId AND is_active=true
+  KMS.decrypt(encrypted_dek) → DEK
+  aesGcmDecrypt(encrypted_kep_blob,      DEK) → kepFileBuffer
+  aesGcmDecrypt(encrypted_password_blob, DEK) → passwordBuffer
+  DEK.fill(0)                       ← знищення
+  return { kepFileBuffer, kepPassword, cleanup }
+  // cleanup() → kepFileBuffer.fill(0) + passwordBuffer.fill(0)
+```
+
+**Формат blob:** `<iv_base64>:<tag_base64>:<ciphertext_base64>` (base64 економить 33% проти hex для великих файлів).
+
+**Гарантії безпеки:**
+- Plaintext КЕП і пароль **ніколи** не зберігаються в БД
+- DEK зануляється у всіх шляхах виконання (success + catch)
+- `cleanup()` зануляє `kepFileBuffer` і `passwordBuffer`; JS string `kepPassword` — immutable (не може бути занулений — обмеження V8), але підлеглий `passwordBuffer` зануляється
+- `console.log` / логи не містять КЕП, пароль або DEK
+- Кожна операція логується в `kep_access_log` без sensitive-даних
+- `listKeps()` SELECT явно не вибирає blob-колонки
+- `last_used_at` update містить `user_id` фільтр (defense-in-depth)
+
+**Правильний патерн виклику (caller відповідальність):**
+```typescript
+const kep = await decryptKep(kepId, userId)
+try {
+  await signDpsRequest(kep.kepFileBuffer, kep.kepPassword)
+} finally {
+  kep.cleanup()  // обов'язково в finally — навіть якщо підписання кинуло помилку
+}
+```
+
+**Аудит-лог (`kep_access_log`):**
+- INSERT дозволений для `authenticated` (RLS policy)
+- SELECT заблокований для всіх ролей — тільки `service_role` (backend) читає через bypass RLS
+- `error_message` зберігає тільки системне повідомлення помилки, ніяких даних КЕП
+
 ---
 
 ## 12. Нормалізація відповідей DPS API
@@ -587,16 +650,21 @@ Telegram-тільки (email не використовується — RESEND_AP
 | 2026-04-01 | **End-to-end верифікація KMS** | `GET /kms/test` → `{success:true, checks:{generateDataKey,encrypt,decrypt}: "ok"}`. Реальний KEP (legacy AES у БД) успішно розшифрований через backend auto-detect. Cron `sync-all`: 6/6 клієнтів синхронізовано, errors: 0. |
 | 2026-04-01 | **Міграція KEP AES → KMS (всі записи)** | `scripts/migrate-kep-to-kms.mjs` — 6/6 `kep_encrypted` записів перемігровано на KMS envelope encryption. `token_encrypted` очищено (NULL). `from-kep/route.ts` рефакторено: encrypt тепер виключно через backend (`POST /kep/upload`), пряме AES (`encrypt()`) видалено. |
 | 2026-04-01 | **Ротація всіх витоклих секретів** | Виявлено `.env.local` з реальними секретами у git-репозиторії. Ротовано (всі платформи): `CRON_SECRET`, `TOKEN_ENCRYPTION_KEY`, `TELEGRAM_BOT_TOKEN`. `NEXT_PUBLIC_SUPABASE_ANON_KEY` → новий publishable key `sb_publishable_...`. `SUPABASE_SERVICE_ROLE_KEY` → новий secret key `sb_secret_...`. `.gitignore` розширено для блокування всіх варіантів `.env`. Vercel і Railway перезапущені з новими змінними. |
+| 2026-04-02 | **Міграція 005: `kep_credentials` + `kep_access_log`** | Виконано в Supabase SQL Editor. Таблиця `kep_credentials` — окреме зберігання зашифрованих КЕП з полями `encrypted_kep_blob`, `encrypted_password_blob`, `encrypted_dek`, `kms_key_id`. RLS: 4 polícy (owner select/insert/update/delete). `kep_access_log` — аудит-лог (INSERT для authenticated, SELECT заблоковано). Тригер `set_updated_at`, часткові індекси. |
+| 2026-04-02 | **`kepEncryptionService.ts` — Envelope Encryption сервіс** | `backend/src/services/kepEncryptionService.ts`. Функції: `encryptKep`, `decryptKep`, `deleteKep`, `listKeps`. Один унікальний DEK на кожен КЕП. DEK зануляється у всіх code paths. `cleanup()` callback для знищення розшифрованих Buffer-ів після підписання. Аудит кожної операції в `kep_access_log`. Жодного plaintext у БД або логах. Виправлено під час code review: `last_used_at` UPDATE отримав `user_id` фільтр (defense-in-depth); виправлено misleading коментар щодо zeroing JS string. |
+| 2026-04-02 | **Міграція 006: `client_id` FK у `kep_credentials`** | Виконано в Supabase SQL Editor. Додано: `client_id uuid references clients(id)` (nullable до backfill), індекс `kep_credentials_client_id_idx`, partial unique index `kep_credentials_one_active_per_client` (`WHERE is_active=true AND client_id IS NOT NULL`) — один активний КЕП на клієнта на рівні БД. |
+| 2026-04-02 | **`/kep-credentials` route + dual-read fallback** | Створено `backend/src/routes/kepCredentials.ts` (POST upload / GET by-client / GET by-id / DELETE / GET list). Зареєстровано в `routes/index.ts`. `kepEncryptionService` отримав `clientId?` в `encryptKep` і нову функцію `decryptKepByClientId`. Оновлено `GET /kep/:clientId` у `routes/kep.ts`: спочатку читає з `kep_credentials`, при відсутності — fallback на `api_tokens`. Додано `backendUploadKepCredential()` у `web/lib/backend.ts`. Створено `scripts/backfill-kep-credentials.mjs` (idempotent). |
 
 ---
 
-## 17. Поточний стан системи (станом на 2026-04-01, кінець сесії 4)
+## 17. Поточний стан системи (станом на 2026-04-02, сесія 5)
 
 ### ✅ Повністю завершено і стабільно
 
 | Область | Стан |
 |---|---|
-| **Шифрування КЕП** | 100% KMS envelope encryption. Всі 6 записів у БД мігровано. Legacy AES більше не використовується для нових записів. |
+| **Шифрування КЕП** | 100% KMS envelope encryption. Всі 6 записів у `api_tokens` мігровано. Новий сервіс `kepEncryptionService.ts` — per-KEP DEK для `kep_credentials`. |
+| **`kep_credentials` + `kep_access_log`** | Таблиці створено (міграція 005). `client_id` FK + унікальний індекс додано (міграція 006). RLS активний. Route `/kep-credentials` задеплоєно. Dual-read fallback у `/kep/:clientId` активний. **Очікує:** backfill (запустити `scripts/backfill-kep-credentials.mjs` після деплою backend). |
 | **Backend (Railway)** | Express.js сервіс запущений. KMS connectivity підтверджено (`/kms/test`). Авто-деплой при push у `backend/**`. |
 | **Синхронізація (cron)** | `sync-all` щодня о 04:00 UTC. Остання перевірка: 6/6 клієнтів OK, 0 помилок. |
 | **Алерти** | Борг, статус, нові документи, КЕП expiry (30 днів), stale sync (48 год) — всі типи реалізовані та задеплоєні. |
@@ -613,7 +681,7 @@ Telegram-тільки (email не використовується — RESEND_AP
 | Backend (Railway) | `https://dps-monitor-production.up.railway.app` | ✅ Online |
 | Supabase | `https://zvvvgjmyecabhugvkyjz.supabase.co` | ✅ Active |
 
-> **Примітка:** `dps-monitor.vercel.app` — аліас, який вказує на виробничий деплой. Основний прямий URL — `web-gold-rho-91.vercel.app`. Обидва функціонально ідентичні.
+> **Авто-деплой:** `dps-monitor` Vercel-проект підключений до GitHub (`qc1ukr-design/dps-monitor`, гілка `main`, rootDir `web`). Кожен `git push origin main` автоматично тригерить деплой. `vercel deploy --prod` вручну більше не потрібен.
 
 ### 🔑 Поточні ключі (формат, не значення)
 
@@ -626,8 +694,41 @@ Telegram-тільки (email не використовується — RESEND_AP
 | `TOKEN_ENCRYPTION_KEY` | 64 hex символи (ротовано 2026-04-01) | Vercel + Railway |
 | `AWS_KMS_KEY_ID` | `arn:aws:kms:eu-central-1:826496717510:key/17fd8a9a-...` | Railway |
 
-### 💡 Можливі наступні кроки (не обов'язкові)
+### 🚦 Обов'язкові наступні кроки (в порядку виконання)
 
-- **`kep_password_encrypted`** — колонка активно використовується backend (читання + запис); _не видаляти_. Якщо потрібно — окремий рефакторинг: об'єднати в один envelope з `kep_encrypted`.
+> Це продовження міграції `kep_credentials`. Виконувати послідовно.
+
+**Крок A — Deploy backend** _(одразу після `git push`)_
+- Railway автоматично підхопить зміни
+- Перевірити що `/kep-credentials/upload` повертає 401 без `X-Backend-Secret` (новий route активний)
+
+**Крок B — Запустити backfill** _(після успішного деплою backend)_
+```bash
+node --env-file=backend/.env scripts/backfill-kep-credentials.mjs
+```
+Очікуваний вивід: `✅ 6 перенесено  ⏭️ 0 пропущено  ❌ 0 помилок`
+- Скрипт idempotent — безпечно перезапускати при помилках
+- `api_tokens` не змінюється — залишається як fallback
+
+**Крок C — Верифікація** _(після backfill)_
+- Перевірити cron sync-all (04:00 UTC або запустити вручну): 6/6 клієнтів, 0 помилок
+- У логах Railway: `GET /kep/:clientId` має йти через "primary path" (kep_credentials), не через "legacy fallback"
+- Перевірити `kep_access_log` у Supabase: 6 записів `USE_FOR_DPS` з `success=true`
+
+**Крок D — Перемкнути upload нових КЕП** _(після стабільної роботи Кроку C)_
+- В `web/app/api/clients/[id]/kep/route.ts`: замінити виклик `POST /kep/upload` → `backendUploadKepCredential()` (вже є в `web/lib/backend.ts`)
+- Це перемикає нові КЕП на `kep_credentials` замість `api_tokens`
+- ⚠️ Одностороннє рішення — після цього нові клієнти будуть тільки в `kep_credentials`
+
+**Крок E — Міграція 008** _(через 1-2 тижні стабільної роботи)_
+- `ALTER TABLE kep_credentials ALTER COLUMN client_id SET NOT NULL`
+- Депрекувати `kep_encrypted` / `kep_password_encrypted` в `api_tokens` (перейменувати, не дропати)
+- Видалити fallback гілку з `GET /kep/:clientId` у `routes/kep.ts`
+
+---
+
+### 💡 Відкладені задачі (не блокують поточний функціонал)
+
+- **`kep_password_encrypted`** — колонка активно використовується backend (читання + запис); _не видаляти_ до завершення Кроку E.
 - **npm вразливості** — 3 з 7 виправлено (`npm audit fix`). Решта 4 потребують Next.js 14→16 (breaking); відкладено.
 - **Нові функції** — за потребою замовника

@@ -71,7 +71,6 @@ export async function GET(request: NextRequest) {
 
   // ── Build digest per user ─────────────────────────────────────────────────
   let digestsSent = 0
-  const debugLog: Record<string, unknown>[] = []
 
   for (const userId of uniqueUserIds) {
     const tgChatId = userTelegramMap.get(userId)
@@ -168,16 +167,10 @@ export async function GET(request: NextRequest) {
       }
 
     lines.push(``, `<a href="https://dps-monitor.vercel.app/dashboard">Перейти на дашборд →</a>`)
-    let tgError: string | null = null
-    try {
-      await sendTelegramMessage(tgChatId, lines.join('\n'))
-    } catch (e) {
-      tgError = String(e)
-    }
+    await sendTelegramMessage(tgChatId, lines.join('\n')).catch(() => { /* ignore */ })
 
     digestsSent++
-    debugLog.push({ userId, tgChatId, tgError, issues: debtClients.length + staleClients.length + kepIssueClients.length, clients: userClients.length })
   }
 
-  return NextResponse.json({ ok: true, digestsSent, _debug: debugLog })
+  return NextResponse.json({ ok: true, digestsSent })
 }

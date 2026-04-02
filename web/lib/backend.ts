@@ -41,3 +41,41 @@ export async function backendGetKep(
 
   return res.json() as Promise<{ kepData: string; password: string }>
 }
+
+/**
+ * Upload and encrypt a KEP to kep_credentials (new table, per-KEP DEK).
+ *
+ * Deactivates any previously active KEP for this client, then stores the new one.
+ * After backfill, GET /kep/:clientId automatically reads from kep_credentials first.
+ */
+export async function backendUploadKepCredential(params: {
+  clientId:   string
+  userId:     string
+  kepData:    string
+  password:   string
+  clientName: string
+  edrpou:     string
+  fileName:   string
+}): Promise<{ kepId: string }> {
+  const { url, secret } = getBackendConfig()
+
+  const res = await fetch(`${url}/kep-credentials/upload`, {
+    method: 'POST',
+    headers: {
+      'X-Backend-Secret': secret,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(params),
+    cache: 'no-store',
+    signal: AbortSignal.timeout(15000),
+  })
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(
+      (body as { error?: string }).error ?? `Backend KEP upload failed (${res.status})`,
+    )
+  }
+
+  return res.json() as Promise<{ kepId: string }>
+}

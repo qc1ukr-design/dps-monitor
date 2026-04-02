@@ -3,6 +3,7 @@ import type { Request, Response } from 'express'
 import { getSupabaseClient } from '../lib/supabase.js'
 import { kmsEncrypt, kmsDecrypt, serializeEnvelope, deserializeEnvelope } from '../lib/kms.js'
 import { aesDecrypt } from '../lib/aes.js'
+import { decryptKepByClientId } from '../services/kepEncryptionService.js'
 
 const router = Router()
 
@@ -159,6 +160,31 @@ router.get('/:clientId', async (req: Request, res: Response): Promise<void> => {
     return
   }
 
+  // ---------------------------------------------------------------------------
+  // Primary path: kep_credentials (new table, per-KEP DEK, audit log)
+  // ---------------------------------------------------------------------------
+  let newDecrypted
+  try {
+    newDecrypted = await decryptKepByClientId(clientId, userId)
+  } catch {
+    // Not yet migrated — fall through to legacy api_tokens path
+  }
+
+  if (newDecrypted) {
+    try {
+      res.json({
+        kepData:  newDecrypted.kepFileBuffer.toString('utf8'),
+        password: newDecrypted.kepPassword,
+      })
+    } finally {
+      newDecrypted.cleanup()
+    }
+    return
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fallback path: api_tokens (legacy — KMS envelope or AES)
+  // ---------------------------------------------------------------------------
   const supabase = getSupabaseClient()
 
   const { data, error } = await supabase

@@ -34,8 +34,8 @@ app.use(
         callback(new Error(`CORS: origin ${origin} not allowed`))
       }
     },
-    methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type', 'X-Backend-Secret'],
+    methods: ['GET', 'POST', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'X-Backend-Secret', 'Authorization'],
   })
 )
 

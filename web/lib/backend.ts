@@ -55,8 +55,15 @@ export async function backendUploadKepCredential(params: {
   password:    string
   clientName:  string
   edrpou:      string
-  fileName:    string
+  fileName?:   string
   accessToken: string   // Supabase JWT — verified server-side; userId derived from it
+  kepInfo?: {
+    caName?:    string | null
+    ownerName?: string | null
+    orgName?:   string | null
+    taxId?:     string | null
+    validTo?:   string | null
+  }
 }): Promise<{ kepId: string }> {
   const { url, secret } = getBackendConfig()
 

@@ -6,10 +6,14 @@
  *   - Multi-file: { files: Array<{ name: string, base64: string }>, password: string }
  *
  * Auto-detects key files vs cert files by extension.
- * Validates KEP + password, stores encrypted in api_tokens.
+ * Validates KEP + password, stores encrypted in kep_credentials (new table, KMS per-KEP DEK).
+ *
+ * Крок D (2026-04-02): switched from legacy POST /kep/upload (api_tokens) to
+ * POST /kep-credentials/upload (kep_credentials). Upload now requires Supabase JWT.
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { backendUploadKepCredential } from '@/lib/backend'
 import { inspectKepWithCert, inspectKepFiles, CERT_EXTS } from '@/lib/dps/signer'
 
 interface RouteParams {
@@ -24,21 +28,28 @@ function getExt(filename: string): string {
 export async function POST(request: NextRequest, { params }: RouteParams) {
   const { id } = await params
   const supabase = await createClient()
+
+  // Verify user + get session token for backend JWT auth
   const { data: { user }, error: authError } = await supabase.auth.getUser()
   if (authError || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Verify client belongs to this user
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session?.access_token) {
+    return NextResponse.json({ error: 'No active session' }, { status: 401 })
+  }
+
+  // Fetch client — need name + edrpou for kep_credentials metadata
   const { data: client } = await supabase
     .from('clients')
-    .select('id')
+    .select('id, name, edrpou')
     .eq('id', id)
     .eq('user_id', user.id)
     .single()
   if (!client) return NextResponse.json({ error: 'Client not found' }, { status: 404 })
 
   const body = await request.json() as {
-    pfxBase64?: string                                    // legacy single-file
-    files?: Array<{ name: string; base64: string }>      // new multi-file
+    pfxBase64?: string
+    files?: Array<{ name: string; base64: string }>
     password: string
   }
   const { pfxBase64, files, password } = body
@@ -48,12 +59,14 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   }
 
   let kepInfo
-  let kepStorageValue: string  // what gets encrypted and stored in DB
+  let kepStorageValue: string
+  let fileName = ''
 
   if (files && files.length > 0) {
-    // ── Multi-file mode ────────────────────────────────────────────────────
+    // ── Multi-file mode ──────────────────────────────────────────────────────
     const keyBuffers: Buffer[] = []
     const certBuffers: Buffer[] = []
+    const keyFiles: Array<{ name: string; base64: string }> = []
 
     for (const f of files) {
       const ext = getExt(f.name)
@@ -62,6 +75,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         certBuffers.push(buf)
       } else {
         keyBuffers.push(buf)
+        keyFiles.push(f)
       }
     }
 
@@ -72,9 +86,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       )
     }
 
+    // Use key file name for display in UI
+    fileName = keyFiles[0]?.name ?? ''
+
     if (certBuffers.length > 0 || keyBuffers.length > 1) {
-      // Multiple files: key+cert pair OR director key + seal key (ЮО scenario)
-      // inspectKepFiles detects ЮО and returns ЄДРПОУ as taxId automatically
       try {
         kepInfo = await inspectKepFiles(keyBuffers, certBuffers, password)
       } catch (e) {
@@ -85,7 +100,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
       kepStorageValue = JSON.stringify({ v: 2, files })
     } else {
-      // Single key file — extract + cache cert to avoid CMP at sync time
       let extractedCertBase64: string | null = null
       try {
         const result = await inspectKepWithCert(keyBuffers[0], password)
@@ -103,13 +117,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
 
   } else if (pfxBase64) {
-    // ── Legacy single-file mode (API compat) ──────────────────────────────
+    // ── Legacy single-file mode (API compat) ─────────────────────────────────
     let pfxBuffer: Buffer
     try {
       pfxBuffer = Buffer.from(pfxBase64, 'base64')
     } catch {
       return NextResponse.json({ error: 'Invalid pfxBase64' }, { status: 400 })
     }
+
+    fileName = 'key.pfx'
 
     let extractedCertBase64: string | null = null
     try {
@@ -123,7 +139,6 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }, { status: 400 })
     }
 
-    // Embed extracted cert in v2 format if available, otherwise legacy base64
     kepStorageValue = extractedCertBase64
       ? JSON.stringify({ v: 2, files: [{ name: '_key.pfx', base64: pfxBase64 }, { name: '_cert.cer', base64: extractedCertBase64 }] })
       : pfxBase64
@@ -135,38 +150,29 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     )
   }
 
-  // Delegate encryption and storage to backend (KMS envelope encryption)
-  const backendUrl = process.env.BACKEND_URL
-  if (!backendUrl) return NextResponse.json({ error: 'BACKEND_URL is not configured' }, { status: 500 })
-
-  const backendSecret = process.env.BACKEND_API_SECRET
-  if (!backendSecret) return NextResponse.json({ error: 'BACKEND_API_SECRET is not configured' }, { status: 500 })
-
-  const backendRes = await fetch(`${backendUrl}/kep/upload`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Backend-Secret': backendSecret,
-    },
-    body: JSON.stringify({
-      clientId: id,
-      userId: user.id,
-      kepData: kepStorageValue,
+  // Delegate encryption and storage to backend (kep_credentials, KMS per-KEP DEK)
+  try {
+    await backendUploadKepCredential({
+      clientId:   id,
+      userId:     user.id,
+      kepData:    kepStorageValue,
       password,
+      clientName: (client as { id: string; name: string; edrpou: string }).name,
+      edrpou:     (client as { id: string; name: string; edrpou: string }).edrpou,
+      fileName,
+      accessToken: session.access_token,
       kepInfo: {
-        caName: kepInfo.caName,
+        caName:    kepInfo.caName,
         ownerName: kepInfo.ownerName,
-        orgName: kepInfo.orgName || undefined,
-        taxId: kepInfo.taxId,
-        validTo: kepInfo.validTo || null,
+        orgName:   kepInfo.orgName   || null,
+        taxId:     kepInfo.taxId,
+        validTo:   kepInfo.validTo   || null,
       },
-    }),
-  })
-
-  if (!backendRes.ok) {
-    const body = await backendRes.json().catch(() => ({}))
+    })
+  } catch (e) {
+    console.error('[kep/route] upload error:', e)
     return NextResponse.json(
-      { error: (body as { error?: string }).error ?? 'Backend KEP upload failed' },
+      { error: 'Помилка збереження КЕП' },
       { status: 500 }
     )
   }
@@ -175,13 +181,37 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 }
 
 // GET /api/clients/[id]/kep — return KEP metadata (no key data)
+// Dual-read: tries kep_credentials first (new), falls back to api_tokens (legacy/backfilled).
 export async function GET(_request: NextRequest, { params }: RouteParams) {
   const { id } = await params
   const supabase = await createClient()
   const { data: { user }, error: authError } = await supabase.auth.getUser()
   if (authError || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Try to read kep_org_name (requires migration 004) — fall back if column missing
+  // ── Primary path: kep_credentials ────────────────────────────────────────
+  const { data: kc } = await supabase
+    .from('kep_credentials')
+    .select('ca_name, owner_name, org_name, tax_id, valid_to, edrpou, client_name, updated_at')
+    .eq('client_id', id)
+    .eq('user_id', user.id)
+    .eq('is_active', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (kc) {
+    return NextResponse.json({
+      configured: true,
+      caName:     kc.ca_name     ?? null,
+      ownerName:  kc.owner_name  ?? kc.client_name,
+      orgName:    kc.org_name    ?? null,
+      validTo:    kc.valid_to    ?? null,
+      taxId:      kc.tax_id      ?? kc.edrpou,
+      updatedAt:  kc.updated_at,
+    })
+  }
+
+  // ── Fallback: api_tokens (legacy — backfilled records with no metadata row) ──
   const [baseResult, orgNameResult] = await Promise.all([
     supabase
       .from('api_tokens')
@@ -200,15 +230,17 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
   const data = baseResult.data
   if (!data?.kep_ca_name) return NextResponse.json({ configured: false })
 
-  const orgName = orgNameResult.error ? '' : ((orgNameResult.data as Record<string, string | null>)?.kep_org_name ?? '')
+  const orgName = orgNameResult.error
+    ? ''
+    : ((orgNameResult.data as Record<string, string | null>)?.kep_org_name ?? '')
 
   return NextResponse.json({
     configured: true,
-    caName: data.kep_ca_name,
+    caName:    data.kep_ca_name,
     ownerName: data.kep_owner_name,
     orgName,
-    validTo: data.kep_valid_to,
-    taxId: data.kep_tax_id,
+    validTo:   data.kep_valid_to,
+    taxId:     data.kep_tax_id,
     updatedAt: data.updated_at,
   })
 }

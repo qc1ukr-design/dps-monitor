@@ -1,8 +1,7 @@
 import { Router } from 'express'
 import type { Request, Response } from 'express'
 import { getSupabaseClient } from '../lib/supabase.js'
-import { kmsEncrypt, kmsDecrypt, serializeEnvelope, deserializeEnvelope } from '../lib/kms.js'
-import { aesDecrypt } from '../lib/aes.js'
+import { kmsEncrypt, serializeEnvelope } from '../lib/kms.js'
 import { decryptKepByClientId } from '../services/kepEncryptionService.js'
 
 const router = Router()
@@ -10,29 +9,6 @@ const router = Router()
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Detect whether a stored value is a KMS envelope (base64 JSON, version=1)
- * or a legacy AES ciphertext (ivHex:tagHex:ciphertextHex).
- */
-function isKmsEnvelope(stored: string): boolean {
-  try {
-    const parsed = JSON.parse(Buffer.from(stored, 'base64').toString('utf8'))
-    return typeof parsed === 'object' && parsed !== null && parsed.version === 1
-  } catch {
-    return false
-  }
-}
-
-/**
- * Decrypt a stored value — handles both KMS envelope and legacy AES formats.
- */
-async function decryptStored(stored: string): Promise<string> {
-  if (isKmsEnvelope(stored)) {
-    return kmsDecrypt(deserializeEnvelope(stored))
-  }
-  return aesDecrypt(stored)
-}
 
 // UUID v4 format guard
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -172,6 +148,8 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
  * Dual-read: tries kep_credentials (new) first, falls back to api_tokens (legacy).
  * Called by /web DPS sync to get the raw KEP + password for signing.
  */
+// Крок E (2026-04-02): fallback to api_tokens removed — all 6 clients verified
+// in kep_credentials (Крок C). Reads exclusively from kep_credentials now.
 router.get('/:clientId', async (req: Request, res: Response): Promise<void> => {
   const { clientId } = req.params
   const { userId } = req.query as { userId?: string }
@@ -181,7 +159,6 @@ router.get('/:clientId', async (req: Request, res: Response): Promise<void> => {
     return
   }
 
-  // M-2: validate UUID format before using as DB filter values
   if (!isValidUuid(clientId)) {
     res.status(400).json({ error: 'clientId must be a valid UUID' })
     return
@@ -191,60 +168,22 @@ router.get('/:clientId', async (req: Request, res: Response): Promise<void> => {
     return
   }
 
-  // ---------------------------------------------------------------------------
-  // Primary path: kep_credentials (new table, per-KEP DEK, audit log)
-  // ---------------------------------------------------------------------------
-  let newDecrypted
+  let decrypted
   try {
-    newDecrypted = await decryptKepByClientId(clientId, userId)
-  } catch (err) {
-    // M-4: log the fallback reason so Railway logs can confirm "6/6 primary path"
-    // during Крок C verification. "KEP not found" = not yet migrated (expected).
-    // Any other error = unexpected primary path failure (needs investigation).
-    const reason = err instanceof Error ? err.message : String(err)
-    console.warn('[kep] primary path miss, falling back to api_tokens:', reason, '| clientId:', clientId)
-  }
-
-  if (newDecrypted) {
-    try {
-      res.json({
-        kepData:  newDecrypted.kepFileBuffer.toString('utf8'),
-        password: newDecrypted.kepPassword,
-      })
-    } finally {
-      newDecrypted.cleanup()
-    }
-    return
-  }
-
-  // ---------------------------------------------------------------------------
-  // Fallback path: api_tokens (legacy — KMS envelope or AES)
-  // ---------------------------------------------------------------------------
-  const supabase = getSupabaseClient()
-
-  const { data, error } = await supabase
-    .from('api_tokens')
-    .select('kep_encrypted, kep_password_encrypted')
-    .eq('client_id', clientId)
-    .eq('user_id', userId)
-    .single()
-
-  if (error || !data) {
+    decrypted = await decryptKepByClientId(clientId, userId)
+  } catch {
     res.status(404).json({ error: 'KEP not found' })
     return
   }
 
-  if (!data.kep_encrypted || !data.kep_password_encrypted) {
-    res.status(404).json({ error: 'KEP not configured for this client' })
-    return
+  try {
+    res.json({
+      kepData:  decrypted.kepFileBuffer.toString('utf8'),
+      password: decrypted.kepPassword,
+    })
+  } finally {
+    decrypted.cleanup()
   }
-
-  const [kepData, password] = await Promise.all([
-    decryptStored(data.kep_encrypted as string),
-    decryptStored(data.kep_password_encrypted as string),
-  ])
-
-  res.json({ kepData, password })
 })
 
 export default router

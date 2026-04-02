@@ -199,8 +199,17 @@ export async function encryptKep(params: {
   edrpou:        string
   fileName:      string
   isActive?:     boolean  // defaults to true; pass false to store inactive until old KEP is deactivated
+  // Certificate metadata (migration 008) — informational only, never used for crypto
+  caName?:       string | null
+  ownerName?:    string | null
+  orgName?:      string | null
+  taxId?:        string | null
+  validTo?:      string | null
 }): Promise<KepCredential> {
-  const { kepFileBuffer, kepPassword, userId, clientId, clientName, edrpou, fileName, isActive = true } = params
+  const {
+    kepFileBuffer, kepPassword, userId, clientId, clientName, edrpou, fileName, isActive = true,
+    caName, ownerName, orgName, taxId, validTo,
+  } = params
 
   let dek: Buffer | null = null
 
@@ -225,14 +234,20 @@ export async function encryptKep(params: {
         user_id:                userId,
         client_id:              clientId ?? null,
         client_name:            clientName,
-        edrpou:                 edrpou,
-        file_name:              fileName,
+        edrpou,
+        file_name:              fileName || null,
         file_size:              kepFileBuffer.length,
         encrypted_kep_blob:     encryptedKepBlob,
         encrypted_password_blob: encryptedPasswordBlob,
         encrypted_dek:          encryptedDekBytes.toString('base64'),
         kms_key_id:             getKmsKeyId(),
         is_active:              isActive,
+        // Certificate metadata (migration 008)
+        ca_name:    caName    ?? null,
+        owner_name: ownerName ?? null,
+        org_name:   orgName   ?? null,
+        tax_id:     taxId     ?? null,
+        valid_to:   validTo   ?? null,
       })
       .select('id, user_id, client_id, client_name, edrpou, file_name, file_size, is_active, last_used_at, created_at, updated_at')
       .single()

@@ -67,13 +67,20 @@ function isValidUuid(v: unknown): v is string {
 router.post('/upload', authMiddleware, async (req: Request, res: Response): Promise<void> => {
   const userId = res.locals.userId as string
 
-  const { clientId, kepData, password, clientName, edrpou, fileName } = req.body as {
+  const { clientId, kepData, password, clientName, edrpou, fileName, kepInfo } = req.body as {
     clientId:   string
     kepData:    string
     password:   string
     clientName: string
     edrpou:     string
     fileName?:  string
+    kepInfo?: {
+      caName?:    string | null
+      ownerName?: string | null
+      orgName?:   string | null
+      taxId?:     string | null
+      validTo?:   string | null
+    }
   }
 
   if (!clientId || !kepData || !password || !clientName || !edrpou) {
@@ -104,6 +111,11 @@ router.post('/upload', authMiddleware, async (req: Request, res: Response): Prom
         edrpou,
         fileName: fileName ?? '',
         isActive: false,
+        caName:    kepInfo?.caName,
+        ownerName: kepInfo?.ownerName,
+        orgName:   kepInfo?.orgName,
+        taxId:     kepInfo?.taxId,
+        validTo:   kepInfo?.validTo,
       })
     } finally {
       kepFileBuffer.fill(0)

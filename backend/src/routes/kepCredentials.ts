@@ -2,6 +2,7 @@ import { Router } from 'express'
 import type { Request, Response } from 'express'
 import {
   encryptKep,
+  activateKep,
   decryptKep,
   decryptKepByClientId,
   deleteKep,
@@ -45,20 +46,11 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
   }
 
   try {
-    // Deactivate any existing active KEP for this client before inserting a new one.
-    // This maintains the one-active-per-client invariant enforced by the partial unique index.
-    const { getSupabaseClient } = await import('../lib/supabase.js')
-    const supabase = getSupabaseClient()
-    await supabase
-      .from('kep_credentials')
-      .update({ is_active: false })
-      .eq('client_id', clientId)
-      .eq('user_id', userId)
-      .eq('is_active', true)
-
-    // kepData is a storage string (JSON v2 or legacy base64) — encode as Buffer for the service
+    // Safe KEP replacement — 3 steps so the client is never left without an active KEP:
+    //
+    // Step 1: Encrypt and store the new KEP as INACTIVE.
+    //         If this fails, the old KEP is untouched and still active.
     const kepFileBuffer = Buffer.from(kepData, 'utf8')
-
     const credential = await encryptKep({
       kepFileBuffer,
       kepPassword: password,
@@ -67,11 +59,17 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
       clientName,
       edrpou,
       fileName: fileName ?? '',
+      isActive: false,
     })
+
+    // Step 2 & 3: Deactivate old KEP(s), then activate the new one.
+    //             If this fails, the new KEP is inactive and the old one stays active.
+    await activateKep(credential.id, clientId, userId)
 
     res.json({ ok: true, kepId: credential.id })
   } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+    console.error('[kep-credentials] upload error:', err)
+    res.status(500).json({ error: 'Помилка збереження КЕП' })
   }
 })
 
@@ -169,7 +167,8 @@ router.delete('/:kepId', async (req: Request, res: Response): Promise<void> => {
     await deleteKep(kepId, userId)
     res.json({ ok: true })
   } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+    console.error('[kep-credentials] delete error:', err)
+    res.status(500).json({ error: 'Помилка видалення КЕП' })
   }
 })
 
@@ -194,7 +193,8 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     const keps = await listKeps(userId)
     res.json(keps)
   } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+    console.error('[kep-credentials] list error:', err)
+    res.status(500).json({ error: 'Помилка отримання списку КЕП' })
   }
 })
 

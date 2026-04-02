@@ -16,6 +16,7 @@ import multer from 'multer'
 import { rateLimit } from 'express-rate-limit'
 import {
   encryptKep,
+  activateKep,
   decryptKep,
   deleteKep,
   listKeps,
@@ -60,6 +61,15 @@ const uploadRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Забагато запитів на завантаження, спробуй пізніше' },
+})
+
+// 20 test/delete requests per hour per IP — each test call hits AWS KMS
+const sensitiveOpRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Забагато запитів, спробуй пізніше' },
 })
 
 // ---------------------------------------------------------------------------
@@ -120,16 +130,7 @@ router.post(
     }
 
     try {
-      // Deactivate existing active KEP for this client before inserting new one
-      if (clientId) {
-        await getSupabaseClient()
-          .from('kep_credentials')
-          .update({ is_active: false })
-          .eq('client_id', clientId)
-          .eq('user_id', userId)
-          .eq('is_active', true)
-      }
-
+      // Safe KEP replacement: store inactive first, then swap active flag
       const credential = await encryptKep({
         kepFileBuffer: req.file.buffer,
         kepPassword:   password,
@@ -138,7 +139,15 @@ router.post(
         clientName,
         edrpou,
         fileName:      req.file.originalname,
+        isActive:      false,
       })
+
+      if (clientId) {
+        await activateKep(credential.id, clientId, userId)
+      } else {
+        // No clientId — activate directly (first KEP, no old one to deactivate)
+        await activateKep(credential.id, '', userId)
+      }
 
       res.status(201).json({
         id:         credential.id,
@@ -148,7 +157,8 @@ router.post(
         createdAt:  credential.createdAt,
       })
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : 'Помилка завантаження' })
+      console.error('[kep] upload error:', err)
+      res.status(500).json({ error: 'Помилка завантаження КЕП' })
     }
   }
 )
@@ -162,7 +172,8 @@ router.get('/list', authMiddleware, async (_req: Request, res: Response): Promis
     const keps = await listKeps(res.locals.userId as string)
     res.json(keps)
   } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Помилка отримання списку' })
+    console.error('[kep] list error:', err)
+    res.status(500).json({ error: 'Помилка отримання списку КЕП' })
   }
 })
 
@@ -170,15 +181,17 @@ router.get('/list', authMiddleware, async (_req: Request, res: Response): Promis
 // DELETE /api/kep/:id
 // ---------------------------------------------------------------------------
 
-router.delete('/:id', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.delete('/:id', sensitiveOpRateLimit, authMiddleware, async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params
 
   try {
     await deleteKep(id, res.locals.userId as string)
     res.json({ success: true })
   } catch (err) {
+    console.error('[kep] delete error:', err)
     const msg = err instanceof Error ? err.message : String(err)
-    res.status(/not found|not authorized/i.test(msg) ? 404 : 500).json({ error: msg })
+    const status = /not found|not owned/i.test(msg) ? 404 : 500
+    res.status(status).json({ error: status === 404 ? 'КЕП не знайдено' : 'Помилка видалення КЕП' })
   }
 })
 
@@ -186,7 +199,7 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response): Promi
 // POST /api/kep/:id/test
 // ---------------------------------------------------------------------------
 
-router.post('/:id/test', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.post('/:id/test', sensitiveOpRateLimit, authMiddleware, async (req: Request, res: Response): Promise<void> => {
   const { id }   = req.params
   const userId   = res.locals.userId as string
 
@@ -207,9 +220,9 @@ router.post('/:id/test', authMiddleware, async (req: Request, res: Response): Pr
       .select('client_name, edrpou')
       .eq('id', id)
       .eq('user_id', userId)
-      .single()
+      .limit(1)
 
-    const row = data as { client_name: string; edrpou: string } | null
+    const row = (data && data.length > 0) ? data[0] as { client_name: string; edrpou: string } : null
     res.json({
       success:    true,
       clientName: row?.client_name ?? null,

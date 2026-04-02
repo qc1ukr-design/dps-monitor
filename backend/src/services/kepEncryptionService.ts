@@ -172,8 +172,9 @@ export async function encryptKep(params: {
   clientName:    string
   edrpou:        string
   fileName:      string
+  isActive?:     boolean  // defaults to true; pass false to store inactive until old KEP is deactivated
 }): Promise<KepCredential> {
-  const { kepFileBuffer, kepPassword, userId, clientId, clientName, edrpou, fileName } = params
+  const { kepFileBuffer, kepPassword, userId, clientId, clientName, edrpou, fileName, isActive = true } = params
 
   let dek: Buffer | null = null
 
@@ -205,6 +206,7 @@ export async function encryptKep(params: {
         encrypted_password_blob: encryptedPasswordBlob,
         encrypted_dek:          encryptedDekBytes.toString('base64'),
         kms_key_id:             getKmsKeyId(),
+        is_active:              isActive,
       })
       .select('id, user_id, client_id, client_name, edrpou, file_name, file_size, is_active, last_used_at, created_at, updated_at')
       .single()
@@ -350,13 +352,14 @@ export async function decryptKepByClientId(clientId: string, userId: string): Pr
     .eq('client_id', clientId)
     .eq('user_id', userId)
     .eq('is_active', true)
-    .single()
+    .order('created_at', { ascending: false })
+    .limit(1)
 
-  if (error || !data) {
+  if (error || !data || data.length === 0) {
     throw new Error('KEP not found in kep_credentials for this client')
   }
 
-  return decryptKep(data.id, userId)
+  return decryptKep(data[0].id, userId)
 }
 
 /**
@@ -370,14 +373,14 @@ export async function deleteKep(kepId: string, userId: string): Promise<void> {
     const supabase = getSupabaseClient()
 
     // Verify ownership before deletion
-    const { data: existing } = await supabase
+    const { data: existingRows } = await supabase
       .from('kep_credentials')
       .select('id')
       .eq('id', kepId)
       .eq('user_id', userId)
-      .single()
+      .limit(1)
 
-    if (!existing) {
+    if (!existingRows || existingRows.length === 0) {
       throw new Error('KEP not found or not owned by this user')
     }
 
@@ -403,6 +406,40 @@ export async function deleteKep(kepId: string, userId: string): Promise<void> {
     })
 
     throw err
+  }
+}
+
+/**
+ * Activate a KEP by id and deactivate all other active KEPs for the same client.
+ *
+ * Used as the final step of safe KEP replacement:
+ *   1. encryptKep(..., isActive: false)  — store new KEP inactive
+ *   2. activateKep(newId, clientId, userId) — atomically swap active flag
+ *
+ * If this step fails the new KEP remains inactive and the old one stays active,
+ * so the client is never left without a working KEP.
+ */
+export async function activateKep(kepId: string, clientId: string, userId: string): Promise<void> {
+  const supabase = getSupabaseClient()
+
+  // Deactivate all currently active KEPs for this client
+  await supabase
+    .from('kep_credentials')
+    .update({ is_active: false })
+    .eq('client_id', clientId)
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .neq('id', kepId)
+
+  // Activate the new KEP
+  const { error } = await supabase
+    .from('kep_credentials')
+    .update({ is_active: true })
+    .eq('id', kepId)
+    .eq('user_id', userId)
+
+  if (error) {
+    throw new Error(`Failed to activate KEP: ${error.message}`)
   }
 }
 

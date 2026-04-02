@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'crypto'
 import type { Request, Response, NextFunction } from 'express'
 
 /**
@@ -14,7 +15,12 @@ export function requireApiSecret(req: Request, res: Response, next: NextFunction
   }
 
   const provided = req.headers['x-backend-secret']
-  if (!provided || provided !== secret) {
+  if (
+    !provided ||
+    typeof provided !== 'string' ||
+    provided.length !== secret.length ||
+    !timingSafeEqual(Buffer.from(provided), Buffer.from(secret))
+  ) {
     res.status(401).json({ error: 'Unauthorized' })
     return
   }
@@ -37,7 +43,11 @@ export function requireCronSecret(req: Request, res: Response, next: NextFunctio
 
   const authHeader = req.headers['authorization']
   const provided = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined
-  if (!provided || provided !== secret) {
+  if (
+    !provided ||
+    provided.length !== secret.length ||
+    !timingSafeEqual(Buffer.from(provided), Buffer.from(secret))
+  ) {
     res.status(401).json({ error: 'Unauthorized' })
     return
   }

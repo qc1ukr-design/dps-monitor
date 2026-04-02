@@ -11,12 +11,14 @@ export function errorHandler(
   _next: NextFunction
 ): void {
   const status = err.statusCode ?? 500
-  const message = err.message ?? 'Internal server error'
 
-  console.error(`[error] ${status} — ${message}`, err.stack)
+  // Log full details server-side (Railway logs) — never expose internals to the client
+  console.error(`[error] ${status} — ${err.message}`, err.stack)
 
-  res.status(status).json({
-    error: message,
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
-  })
+  // Return a generic message to the client — no stack traces, no internal details
+  const clientMessage = status < 500
+    ? (err.message ?? 'Bad request')
+    : 'Internal server error'
+
+  res.status(status).json({ error: clientMessage })
 }

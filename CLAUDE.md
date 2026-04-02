@@ -289,7 +289,7 @@ DPS-Monitor/
 - [x] **`/kep-credentials` route** — `backend/src/routes/kepCredentials.ts` задеплоєно ✅
 - [x] **Dual-read fallback** — `GET /kep/:clientId` спочатку читає `kep_credentials`, fallback на `api_tokens` ✅
 - [x] **`backendUploadKepCredential()`** — додано у `web/lib/backend.ts` ✅
-- [ ] **Крок B — Запустити backfill:** `node --env-file=backend/.env scripts/backfill-kep-credentials.mjs` (ідемпотентний, очікувано 6 перенесено)
+- [x] **Крок B — Backfill виконано:** 6/6 перенесено в `kep_credentials` ✅ (2026-04-02)
 - [ ] **Крок C — Верифікація:** cron sync-all 6/6, логи Railway "primary path" (не "legacy fallback"), `kep_access_log` 6 записів
 - [ ] **Крок D — Перемкнути upload:** в `kep/route.ts` замінити `POST /kep/upload` → `backendUploadKepCredential()` (одностороннє рішення)
 - [ ] **Крок E — Міграція 008** (через 1-2 тижні після Кроку C): `client_id SET NOT NULL`, видалити fallback з `routes/kep.ts`, депрекувати `kep_encrypted` в `api_tokens`

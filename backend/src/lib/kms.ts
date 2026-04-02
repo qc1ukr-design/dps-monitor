@@ -47,21 +47,23 @@ export async function kmsEncrypt(plaintext: string): Promise<KmsEnvelope> {
   }
 
   const dataKey = Buffer.from(Plaintext)
-  const iv = randomBytes(12)
-  const cipher = createCipheriv(ALGORITHM, dataKey, iv)
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
-  const tag = cipher.getAuthTag()
+  try {
+    const iv = randomBytes(12)
+    const cipher = createCipheriv(ALGORITHM, dataKey, iv)
+    const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+    const tag = cipher.getAuthTag()
 
-  // Zero out the plaintext data key from memory
-  dataKey.fill(0)
-
-  return {
-    version: 1,
-    kmsKeyId,
-    encryptedDataKey: Buffer.from(CiphertextBlob).toString('base64'),
-    iv: iv.toString('base64'),
-    tag: tag.toString('base64'),
-    ciphertext: encrypted.toString('base64'),
+    return {
+      version: 1,
+      kmsKeyId,
+      encryptedDataKey: Buffer.from(CiphertextBlob).toString('base64'),
+      iv: iv.toString('base64'),
+      tag: tag.toString('base64'),
+      ciphertext: encrypted.toString('base64'),
+    }
+  } finally {
+    // Zero out the plaintext data key in all code paths (success and error)
+    dataKey.fill(0)
   }
 }
 
@@ -86,17 +88,20 @@ export async function kmsDecrypt(envelope: KmsEnvelope): Promise<string> {
   }
 
   const dataKey = Buffer.from(Plaintext)
-  const iv = Buffer.from(envelope.iv, 'base64')
-  const tag = Buffer.from(envelope.tag, 'base64')
-  const ciphertext = Buffer.from(envelope.ciphertext, 'base64')
+  try {
+    const iv = Buffer.from(envelope.iv, 'base64')
+    const tag = Buffer.from(envelope.tag, 'base64')
+    const ciphertext = Buffer.from(envelope.ciphertext, 'base64')
 
-  const decipher = createDecipheriv(ALGORITHM, dataKey, iv)
-  decipher.setAuthTag(tag)
-  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+    const decipher = createDecipheriv(ALGORITHM, dataKey, iv)
+    decipher.setAuthTag(tag)
+    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
 
-  dataKey.fill(0)
-
-  return decrypted.toString('utf8')
+    return decrypted.toString('utf8')
+  } finally {
+    // Zero out the plaintext data key in all code paths (success and error)
+    dataKey.fill(0)
+  }
 }
 
 /**

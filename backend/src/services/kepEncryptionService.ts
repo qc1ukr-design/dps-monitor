@@ -24,6 +24,21 @@ const IV_BYTES   = 12  // 96-bit IV — recommended for GCM
 const TAG_BYTES  = 16  // 128-bit authentication tag
 
 // ---------------------------------------------------------------------------
+// Public error types
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown by deleteKep() when the KEP does not exist or is not owned by userId.
+ * Allows callers to distinguish 404 from 500 by type rather than message content.
+ */
+export class KepNotFoundError extends Error {
+  constructor(message = 'KEP not found or not owned by this user') {
+    super(message)
+    this.name = 'KepNotFoundError'
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
@@ -123,6 +138,17 @@ function aesGcmDecryptBuffer(blob: string, key: Buffer): Buffer {
   decipher.setAuthTag(tag)
 
   return Buffer.concat([decipher.update(ct), decipher.final()])
+}
+
+/**
+ * Sanitize an error message before writing it to the audit log (M-2).
+ * Strips AWS ARN patterns and truncates to 500 chars to prevent accidental
+ * leakage of internal details if the log is ever exported or queried.
+ */
+function sanitizeErrorMessage(msg: string): string {
+  return msg
+    .replace(/arn:aws:[^\s"']+/gi, '[ARN]')   // strip AWS ARNs
+    .slice(0, 500)
 }
 
 /** Write a log entry to kep_access_log — never throws (errors are swallowed). */
@@ -242,7 +268,7 @@ export async function encryptKep(params: {
       userId,
       action:       'UPLOAD',
       success:      false,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
     })
 
     throw err
@@ -311,10 +337,14 @@ export async function decryptKep(kepId: string, userId: string): Promise<Decrypt
     await writeAuditLog({ kepId, userId, action: 'USE_FOR_DPS', success: true, errorMessage: null })
 
     // 6. Return decrypted material + cleanup function
+    // M-1: cleaned flag prevents double-zeroing from masking accidental re-use
+    let cleaned = false
     return {
       kepFileBuffer,
       kepPassword,
       cleanup: () => {
+        if (cleaned) return
+        cleaned = true
         kepFileBuffer.fill(0)
         passwordBuffer.fill(0)
       },
@@ -330,7 +360,7 @@ export async function decryptKep(kepId: string, userId: string): Promise<Decrypt
       userId,
       action:       'USE_FOR_DPS',
       success:      false,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
     })
 
     throw err
@@ -381,7 +411,7 @@ export async function deleteKep(kepId: string, userId: string): Promise<void> {
       .limit(1)
 
     if (!existingRows || existingRows.length === 0) {
-      throw new Error('KEP not found or not owned by this user')
+      throw new KepNotFoundError()
     }
 
     const { error } = await supabase
@@ -402,7 +432,7 @@ export async function deleteKep(kepId: string, userId: string): Promise<void> {
       userId,
       action:       'DELETE',
       success:      false,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
     })
 
     throw err
@@ -421,6 +451,19 @@ export async function deleteKep(kepId: string, userId: string): Promise<void> {
  */
 export async function activateKep(kepId: string, clientId: string | null, userId: string): Promise<void> {
   const supabase = getSupabaseClient()
+
+  // M-5: verify ownership before calling the atomic RPC — defense-in-depth in case
+  // the SQL function's WHERE clause ever drifts from the expected behavior.
+  const { data: ownerCheck } = await supabase
+    .from('kep_credentials')
+    .select('id')
+    .eq('id', kepId)
+    .eq('user_id', userId)
+    .limit(1)
+
+  if (!ownerCheck || ownerCheck.length === 0) {
+    throw new KepNotFoundError(`KEP ${kepId} not found or not owned by user ${userId}`)
+  }
 
   // Both UPDATEs execute atomically inside the PostgreSQL function (migration 007).
   // If activation fails, the old KEP remains active — client is never left without a KEP.
@@ -473,7 +516,7 @@ export async function listKeps(userId: string): Promise<KepMetadata[]> {
       userId,
       action:       'VIEW_LIST',
       success:      false,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
     })
 
     throw err

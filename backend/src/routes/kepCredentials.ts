@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import type { Request, Response } from 'express'
+import type { Request, Response, RequestHandler } from 'express'
 import {
   encryptKep,
   activateKep,
@@ -8,24 +8,44 @@ import {
   deleteKep,
   listKeps,
 } from '../services/kepEncryptionService.js'
+import { getSupabaseClient } from '../lib/supabase.js'
 
 const router = Router()
 
-// UUID v4 format — guards against malformed / injected userId values
+// ---------------------------------------------------------------------------
+// Auth middleware — verifies Supabase JWT, stores userId in res.locals
+// Both X-Backend-Secret (checked by requireApiSecret in routes/index.ts) AND
+// a valid JWT are required. userId is derived from the JWT, never from the
+// request body or headers supplied by the caller.
+// ---------------------------------------------------------------------------
+
+const authMiddleware: RequestHandler = async (req, res, next) => {
+  const header = req.headers['authorization']
+  const token  = header?.startsWith('Bearer ') ? header.slice(7) : undefined
+
+  if (!token) {
+    res.status(401).json({ error: 'Authorization header with Supabase JWT required' })
+    return
+  }
+
+  try {
+    const { data, error } = await getSupabaseClient().auth.getUser(token)
+    if (error || !data.user) {
+      res.status(401).json({ error: 'Invalid or expired token' })
+      return
+    }
+    res.locals.userId = data.user.id
+    next()
+  } catch {
+    res.status(401).json({ error: 'Token validation failed' })
+  }
+}
+
+// UUID v4 format — guards against malformed / injected values
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function isValidUuid(v: unknown): v is string {
   return typeof v === 'string' && UUID_RE.test(v)
-}
-
-/**
- * Read userId from the X-User-Id request header.
- * Returns undefined when the header is absent or not a valid UUID.
- */
-function getUserId(req: Request): string | undefined {
-  const value = req.headers['x-user-id']
-  const userId = Array.isArray(value) ? value[0] : value
-  return isValidUuid(userId) ? userId : undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -36,20 +56,19 @@ function getUserId(req: Request): string | undefined {
  *
  * Body:
  *   clientId   — UUID of the client (clients.id)
- *   userId     — UUID of the Supabase user
  *   kepData    — raw KEP storage string (JSON v2 or legacy base64)
  *   password   — plaintext KEP password
  *   clientName — display name of the client
  *   edrpou     — ЄДРПОУ or РНОКПП of the client
  *   fileName   — original file name (optional)
  *
- * If an active KEP already exists for this client, deactivate it first,
- * then insert the new one (atomic certificate renewal).
+ * userId is taken from the verified Supabase JWT — NOT from the request body.
  */
-router.post('/upload', async (req: Request, res: Response): Promise<void> => {
-  const { clientId, userId, kepData, password, clientName, edrpou, fileName } = req.body as {
+router.post('/upload', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+  const userId = res.locals.userId as string
+
+  const { clientId, kepData, password, clientName, edrpou, fileName } = req.body as {
     clientId:   string
-    userId:     string
     kepData:    string
     password:   string
     clientName: string
@@ -57,8 +76,8 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
     fileName?:  string
   }
 
-  if (!clientId || !userId || !kepData || !password || !clientName || !edrpou) {
-    res.status(400).json({ error: 'clientId, userId, kepData, password, clientName, edrpou are required' })
+  if (!clientId || !kepData || !password || !clientName || !edrpou) {
+    res.status(400).json({ error: 'clientId, kepData, password, clientName, edrpou are required' })
     return
   }
 
@@ -67,30 +86,24 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
     return
   }
 
-  if (!isValidUuid(userId)) {
-    res.status(400).json({ error: 'userId must be a valid UUID' })
-    return
-  }
-
   try {
-    // Safe KEP replacement — 3 steps so the client is never left without an active KEP:
-    //
-    // Step 1: Encrypt and store the new KEP as INACTIVE.
-    //         If this fails, the old KEP is untouched and still active.
     const kepFileBuffer = Buffer.from(kepData, 'utf8')
-    const credential = await encryptKep({
-      kepFileBuffer,
-      kepPassword: password,
-      userId,
-      clientId,
-      clientName,
-      edrpou,
-      fileName: fileName ?? '',
-      isActive: false,
-    })
+    let credential
+    try {
+      credential = await encryptKep({
+        kepFileBuffer,
+        kepPassword: password,
+        userId,
+        clientId,
+        clientName,
+        edrpou,
+        fileName: fileName ?? '',
+        isActive: false,
+      })
+    } finally {
+      kepFileBuffer.fill(0)
+    }
 
-    // Step 2 & 3: Deactivate old KEP(s), then activate the new one (atomic via RPC).
-    //             If this fails, the new KEP is inactive and the old one stays active.
     await activateKep(credential.id, clientId, userId)
 
     res.json({ ok: true, kepId: credential.id })
@@ -105,16 +118,15 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
 // ---------------------------------------------------------------------------
 /**
  * Decrypt and return the active KEP for a given client.
- * Used by the sync flow — returns the same shape as GET /kep/:clientId.
  *
- * Header: X-User-Id — UUID of the Supabase user
+ * Auth: Authorization: Bearer <supabase-jwt>
  */
-router.get('/by-client/:clientId', async (req: Request, res: Response): Promise<void> => {
+router.get('/by-client/:clientId', authMiddleware, async (req: Request, res: Response): Promise<void> => {
   const { clientId } = req.params
-  const userId = getUserId(req)
+  const userId = res.locals.userId as string
 
-  if (!userId) {
-    res.status(400).json({ error: 'X-User-Id header must be a valid UUID' })
+  if (!isValidUuid(clientId)) {
+    res.status(400).json({ error: 'clientId must be a valid UUID' })
     return
   }
 
@@ -127,7 +139,6 @@ router.get('/by-client/:clientId', async (req: Request, res: Response): Promise<
   }
 
   try {
-    // kepFileBuffer contains UTF-8 encoded kepStorageValue string
     const kepData = decrypted.kepFileBuffer.toString('utf8')
     const kepPassword = decrypted.kepPassword
     res.json({ kepData, password: kepPassword })
@@ -142,14 +153,14 @@ router.get('/by-client/:clientId', async (req: Request, res: Response): Promise<
 /**
  * Decrypt and return a KEP by its own ID.
  *
- * Header: X-User-Id — UUID of the Supabase user
+ * Auth: Authorization: Bearer <supabase-jwt>
  */
-router.get('/:kepId', async (req: Request, res: Response): Promise<void> => {
+router.get('/:kepId', authMiddleware, async (req: Request, res: Response): Promise<void> => {
   const { kepId } = req.params
-  const userId = getUserId(req)
+  const userId = res.locals.userId as string
 
-  if (!userId) {
-    res.status(400).json({ error: 'X-User-Id header must be a valid UUID' })
+  if (!isValidUuid(kepId)) {
+    res.status(400).json({ error: 'kepId must be a valid UUID' })
     return
   }
 
@@ -176,14 +187,14 @@ router.get('/:kepId', async (req: Request, res: Response): Promise<void> => {
 /**
  * Hard-delete a KEP credential (audit log preserved).
  *
- * Header: X-User-Id — UUID of the Supabase user
+ * Auth: Authorization: Bearer <supabase-jwt>
  */
-router.delete('/:kepId', async (req: Request, res: Response): Promise<void> => {
+router.delete('/:kepId', authMiddleware, async (req: Request, res: Response): Promise<void> => {
   const { kepId } = req.params
-  const userId = getUserId(req)
+  const userId = res.locals.userId as string
 
-  if (!userId) {
-    res.status(400).json({ error: 'X-User-Id header must be a valid UUID' })
+  if (!isValidUuid(kepId)) {
+    res.status(400).json({ error: 'kepId must be a valid UUID' })
     return
   }
 
@@ -200,17 +211,12 @@ router.delete('/:kepId', async (req: Request, res: Response): Promise<void> => {
 // GET /kep-credentials
 // ---------------------------------------------------------------------------
 /**
- * List metadata for all active KEP credentials of a user (no blobs).
+ * List metadata for all active KEP credentials of the authenticated user.
  *
- * Header: X-User-Id — UUID of the Supabase user
+ * Auth: Authorization: Bearer <supabase-jwt>
  */
-router.get('/', async (req: Request, res: Response): Promise<void> => {
-  const userId = getUserId(req)
-
-  if (!userId) {
-    res.status(400).json({ error: 'X-User-Id header must be a valid UUID' })
-    return
-  }
+router.get('/', authMiddleware, async (_req: Request, res: Response): Promise<void> => {
+  const userId = res.locals.userId as string
 
   try {
     const keps = await listKeps(userId)

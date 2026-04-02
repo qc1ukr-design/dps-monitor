@@ -20,6 +20,7 @@ import {
   decryptKep,
   deleteKep,
   listKeps,
+  KepNotFoundError,
 } from '../services/kepEncryptionService.js'
 import { getSupabaseClient } from '../lib/supabase.js'
 
@@ -81,7 +82,7 @@ const upload = multer({
   limits:  { fileSize: 5 * 1024 * 1024 },
 })
 
-/** Wraps upload.single() to convert MulterError into proper HTTP responses. */
+/** Wraps upload.single() to convert MulterError into fixed HTTP responses (H-5). */
 function multerSingle(fieldName: string): RequestHandler {
   return (req, res, next) => {
     upload.single(fieldName)(req, res, (err) => {
@@ -90,11 +91,14 @@ function multerSingle(fieldName: string): RequestHandler {
           res.status(413).json({ error: 'Файл перевищує максимальний розмір 5 MB' })
           return
         }
-        res.status(400).json({ error: err.message })
+        // Other multer errors — fixed string, not err.message
+        res.status(400).json({ error: 'Помилка обробки файлу' })
         return
       }
       if (err) {
-        res.status(400).json({ error: err instanceof Error ? err.message : String(err) })
+        // Unexpected error — fixed string, log internally
+        console.error('[kep] multer unexpected error:', err)
+        res.status(400).json({ error: 'Помилка обробки файлу' })
         return
       }
       next()
@@ -129,10 +133,11 @@ router.post(
       return
     }
 
+    // C-2: keep a reference to zero the buffer in all code paths
+    const kepFileBuffer = req.file.buffer
     try {
-      // Safe KEP replacement: store inactive first, then swap active flag
       const credential = await encryptKep({
-        kepFileBuffer: req.file.buffer,
+        kepFileBuffer,
         kepPassword:   password,
         userId,
         clientId:      clientId || undefined,
@@ -155,6 +160,9 @@ router.post(
     } catch (err) {
       console.error('[kep] upload error:', err)
       res.status(500).json({ error: 'Помилка завантаження КЕП' })
+    } finally {
+      // C-2: zero plaintext KEP bytes regardless of success or failure
+      kepFileBuffer.fill(0)
     }
   }
 )
@@ -184,10 +192,13 @@ router.delete('/:id', sensitiveOpRateLimit, authMiddleware, async (req: Request,
     await deleteKep(id, res.locals.userId as string)
     res.json({ success: true })
   } catch (err) {
+    // H-4: distinguish 404 by type, not by regex on err.message
+    if (err instanceof KepNotFoundError) {
+      res.status(404).json({ error: 'КЕП не знайдено' })
+      return
+    }
     console.error('[kep] delete error:', err)
-    const msg = err instanceof Error ? err.message : String(err)
-    const status = /not found|not owned/i.test(msg) ? 404 : 500
-    res.status(status).json({ error: status === 404 ? 'КЕП не знайдено' : 'Помилка видалення КЕП' })
+    res.status(500).json({ error: 'Помилка видалення КЕП' })
   }
 })
 
@@ -203,10 +214,9 @@ router.post('/:id/test', sensitiveOpRateLimit, authMiddleware, async (req: Reque
   try {
     decrypted = await decryptKep(id, userId)
   } catch (err) {
-    res.json({
-      success: false,
-      error:   err instanceof Error ? err.message : 'Не вдалось розшифрувати КЕП',
-    })
+    // H-3: never expose err.message to the client — it may contain internal details
+    console.error('[kep] test decrypt error:', err)
+    res.json({ success: false, error: 'Не вдалось розшифрувати КЕП' })
     return
   }
 

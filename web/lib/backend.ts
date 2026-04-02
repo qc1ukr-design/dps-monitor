@@ -49,24 +49,27 @@ export async function backendGetKep(
  * After backfill, GET /kep/:clientId automatically reads from kep_credentials first.
  */
 export async function backendUploadKepCredential(params: {
-  clientId:   string
-  userId:     string
-  kepData:    string
-  password:   string
-  clientName: string
-  edrpou:     string
-  fileName:   string
+  clientId:    string
+  userId:      string
+  kepData:     string
+  password:    string
+  clientName:  string
+  edrpou:      string
+  fileName:    string
+  accessToken: string   // Supabase JWT — verified server-side; userId derived from it
 }): Promise<{ kepId: string }> {
   const { url, secret } = getBackendConfig()
+
+  const { accessToken, ...body } = params
 
   const res = await fetch(`${url}/kep-credentials/upload`, {
     method: 'POST',
     headers: {
       'X-Backend-Secret': secret,
+      'Authorization': `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
-      'X-User-Id': params.userId,
     },
-    body: JSON.stringify(params),
+    body: JSON.stringify(body),
     cache: 'no-store',
     signal: AbortSignal.timeout(15000),
   })

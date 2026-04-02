@@ -10,6 +10,10 @@ import { errorHandler } from './middleware/errorHandler.js'
 const app = express()
 const PORT = parseInt(process.env.PORT ?? '3001', 10)
 
+// M-4: trust Railway's reverse proxy so rate limiters see the real client IP
+// from X-Forwarded-For rather than the proxy's internal IP
+app.set('trust proxy', 1)
+
 // ---------------------------------------------------------------------------
 // Security headers
 // ---------------------------------------------------------------------------
@@ -35,7 +39,8 @@ app.use(
       }
     },
     methods: ['GET', 'POST', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'X-Backend-Secret', 'Authorization'],
+    // X-User-Id kept for legacy compatibility; Authorization carries Supabase JWT
+    allowedHeaders: ['Content-Type', 'X-Backend-Secret', 'Authorization', 'X-User-Id'],
   })
 )
 

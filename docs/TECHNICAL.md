@@ -1,6 +1,6 @@
 # DPS-Monitor — Технічна документація
 
-> Останнє оновлення: 2026-04-02 (сесія 5)
+> Останнє оновлення: 2026-04-02 (сесія 6)
 
 ---
 
@@ -657,10 +657,11 @@ Telegram-тільки (email не використовується — RESEND_AP
 | 2026-04-02 | **Backfill `api_tokens` → `kep_credentials` виконано** | `node scripts/backfill-kep-credentials.mjs` — 6/6 перенесено, 0 помилок. Усі записи тепер мають per-KEP DEK у `kep_credentials`. `api_tokens` збережено як fallback. |
 | 2026-04-02 | **Public KEP REST API (`/api/kep/*`)** | Новий `backend/src/routes/kepRoutes.ts`. Auth: Supabase JWT (`Authorization: Bearer`), а не `X-Backend-Secret`. Endpoints: POST upload (multer, 5 MB, rate limit 10/год), GET list, DELETE, POST test. CORS розширено: додано `DELETE` і `Authorization`. Знайдено і виправлено баг: multer `LIMIT_FILE_SIZE` давав 500 замість 413 — додано `multerSingle()` wrapper. |
 | 2026-04-02 | **End-to-end тестування KEP REST API** | 13 тестів на production: auth enforcement, валідація полів, upload/list/delete/test повний цикл, ізоляція між юзерами, file size limit. Всі пройдено ✅. Деталі — §18. |
+| 2026-04-02 | **Security audit + виправлення 9 вразливостей (сесія 7)** | Проведено повний security audit архітектури КЕП. Знайдено 19 проблем (4 критичні, 5 високих, 5 середніх, 5 низьких). Виправлено 9: **C-1/C-2** — `kmsEncrypt` і `kmsDecrypt` обгорнуто в `try/finally` — DEK тепер гарантовано зануляється при будь-якій помилці; **C-3** — порівняння `X-Backend-Secret` і `CRON_SECRET` замінено з `!==` на `crypto.timingSafeEqual()` (захист від timing attack); **H-1** — `.single()` в `decryptKepByClientId` замінено на `.limit(1).order('created_at', desc)` (не падає при >1 записі); **H-2** — реалізовано безпечну заміну КЕП: нова функція `activateKep()`, новий КЕП зберігається як `is_active=false`, потім атомарно активується — клієнт ніколи не лишається без активного КЕП; **H-4** — `err.message` прибрано з усіх HTTP 500-відповідей, замінено на generic Ukrainian повідомлення, деталі логуються тільки в Railway; **M-3** — додано `sensitiveOpRateLimit` (20/год) на `DELETE /api/kep/:id` і `POST /api/kep/:id/test`; **M-5** — `errorHandler.ts` більше не повертає stack trace в HTTP відповідях. Коміт: `6dc6bd9`, задеплоєно на Railway. |
 
 ---
 
-## 17. Поточний стан системи (станом на 2026-04-02, сесія 6)
+## 17. Поточний стан системи (станом на 2026-04-02, сесія 7)
 
 ### ✅ Повністю завершено і стабільно
 
@@ -676,6 +677,7 @@ Telegram-тільки (email не використовується — RESEND_AP
 | **Dashboard** | Таблиця з фільтрами/сортуванням/архівом. Колонка "КЕП до" з кольоровим індикатором. |
 | **Excel-експорт** | 8 колонок у зведеному звіті, включаючи "КЕП дійсний до" з кольором. |
 | **Безпека секретів** | Всі секрети ротовано після виявлення витоку. `.gitignore` захищає від повторення. Supabase мігровано на новий формат ключів (`sb_publishable_` / `sb_secret_`). |
+| **Security audit КЕП** | Проведено повний аудит (сесія 7). 19 проблем знайдено, 9 виправлено і задеплоєно (коміт `6dc6bd9`). Залишок — технічний борг (транзакції БД, уніфікація KMS клієнта). Деталі — §16 хронологія 2026-04-02. |
 
 ### 🌐 Продакшн URL
 
@@ -789,3 +791,85 @@ Blob-поля (`encrypted_kep_blob`, `encrypted_dek` тощо) **ніколи** 
 | 13 | User2 пробує DELETE/test KEP user1 | 404 / `success: false` | ✅ |
 
 **Баг знайдений під час тестування:** multer `LIMIT_FILE_SIZE` error не перехоплювався → 500. Виправлено wrapper-функцією `multerSingle()` яка ловить `MulterError` і маппить `LIMIT_FILE_SIZE` → 413.
+
+---
+
+## 19. Security Audit — KEP Encryption Layer (2026-04-02)
+
+Два незалежних аудити Security Engineer агента по файлах `kepEncryptionService.ts`, `kepCredentials.ts`, `kepRoutes.ts`. Всі знайдені проблеми виправлено в тому ж сеансі (коміт `0109756`).
+
+### 19.1 Виправлені проблеми
+
+#### CRITICAL
+
+**C-1 — kepCredentials.ts: userId без JWT верифікації**
+- **Проблема:** userId брався з тіла запиту або `X-User-Id` заголовку без криптографічної перевірки. При компрометації `BACKEND_API_SECRET` зловмисник міг читати/видаляти КЕП будь-якого користувача, підставивши довільний UUID.
+- **Виправлення:** Додано `authMiddleware` в `kepCredentials.ts` — аналогічний до `kepRoutes.ts`. Вимагає `Authorization: Bearer <supabase-jwt>`. `userId` береться **виключно** з верифікованого JWT через `supabase.auth.getUser(token)`. Обидва захисти (`X-Backend-Secret` + JWT) обов'язкові одночасно.
+- **Вплив на виклики:** `backendUploadKepCredential()` у `web/lib/backend.ts` тепер приймає обов'язковий параметр `accessToken` і пересилає його як `Authorization: Bearer`.
+- **⚠️ Важливо для кроку D міграції:** Коли `kep/route.ts` буде перемикатися на `backendUploadKepCredential()`, потрібно отримати JWT через `(await supabase.auth.getSession()).data.session?.access_token` і передати як `accessToken`.
+
+**C-2 — kepRoutes.ts: req.file.buffer не занулювався**
+- **Проблема:** Після виклику `encryptKep()` plaintext КЕП залишався в `req.file.buffer` (multer memoryStorage) до збирання сміття.
+- **Виправлення:** Збережено посилання `const kepFileBuffer = req.file.buffer` перед `try`, в `finally` — `kepFileBuffer.fill(0)`. Спрацьовує в усіх code paths (успіх, помилка, виняток).
+
+#### HIGH
+
+**H-1/H-2 — kepCredentials.ts: path params без UUID валідації**
+- **Проблема:** `clientId` у `/by-client/:clientId` та `kepId` у `/:kepId` (GET/DELETE) передавались у Supabase запити без перевірки формату.
+- **Виправлення:** Додано `isValidUuid()` перевірку для всіх path params, повертає `400` при невалідному форматі.
+
+**H-3 — kepRoutes.ts /test: err.message у відповіді**
+- **Проблема:** При помилці `decryptKep()` повне повідомлення винятку (може містити Supabase деталі, назви таблиць, `"KEP not found or not active"`) відправлялось у браузер — enumeration oracle.
+- **Виправлення:** `res.json({ success: false, error: 'Не вдалось розшифрувати КЕП' })` — фіксований рядок. Реальна помилка логується через `console.error`.
+
+**H-4 — kepRoutes.ts DELETE: regex на err.message**
+- **Проблема:** HTTP статус 404 vs 500 визначався через `/not found|not owned/i.test(err.message)` — крихкий контракт на текст внутрішньої помилки.
+- **Виправлення:** Введено `KepNotFoundError extends Error` (експортується з `kepEncryptionService.ts`). `deleteKep()` кидає `KepNotFoundError` при відсутньому/чужому KEP. Роут ловить `err instanceof KepNotFoundError` → 404.
+
+**H-5 — kepRoutes.ts multerSingle: сирий err.message**
+- **Проблема:** Для `MulterError` (крім `LIMIT_FILE_SIZE`) та непередбачених помилок `err.message` відправлявся клієнту.
+- **Виправлення:** Всі multer помилки повертають фіксований рядок `'Помилка обробки файлу'`. Непередбачені помилки логуються через `console.error`.
+
+#### MEDIUM
+
+**M-1 — kepEncryptionService.ts: cleanup() без cleaned флагу**
+- **Проблема:** Повторний виклик `cleanup()` мовчки перезанулював вже занулені буфери — потенційне маскування помилок логіки.
+- **Виправлення:** Додано `let cleaned = false` в замиканні. Повторний виклик — no-op.
+
+**M-2 — kepEncryptionService.ts: сирий err.message в audit log**
+- **Проблема:** `err.message` (може містити AWS ARN, Supabase внутрішні коди) писався в `kep_access_log.error_message` без обробки.
+- **Виправлення:** Функція `sanitizeErrorMessage()` — видаляє AWS ARN патерни (`arn:aws:...` → `[ARN]`), обрізає до 500 символів. Використовується у всіх викликах `writeAuditLog` при помилках.
+
+**M-3 — index.ts CORS: X-User-Id відсутній у allowedHeaders**
+- **Виправлення:** Додано `'X-User-Id'` до `allowedHeaders`. Актуально для браузерних/мобільних клієнтів у майбутньому.
+
+**M-4 — index.ts: відсутній trust proxy**
+- **Проблема:** Railway запускає сервіс за reverse proxy. Без `trust proxy` rate limiter бачив IP проксі, а не реального клієнта.
+- **Виправлення:** `app.set('trust proxy', 1)` — додано одразу після ініціалізації Express app.
+
+**M-5 — kepEncryptionService.ts activateKep(): немає pre-check**
+- **Проблема:** `activateKep()` відразу викликав RPC без перевірки що `kepId` належить `userId`.
+- **Виправлення:** Перед RPC викликом — Supabase query `.eq('id', kepId).eq('user_id', userId)`. Якщо запис не знайдено — `KepNotFoundError`.
+
+#### LOW
+
+**L-2 — kepCredentials.ts POST /upload: kepFileBuffer не занулювався**
+- **Проблема:** `Buffer.from(kepData, 'utf8')` у внутрішньому роуті не занулювався після `encryptKep()`.
+- **Виправлення:** `finally { kepFileBuffer.fill(0) }` навколо `encryptKep()` + `activateKep()`.
+
+### 19.2 Архітектурні зміни, що залишилися незмінними
+
+Аудит підтвердив коректність:
+- DEK zeroing у `encryptKep()` і `decryptKep()` — всі code paths покриті
+- `cleanup()` патерн у всіх викликах `decryptKep()`
+- `timingSafeEqual` у `auth.ts` для порівняння `BACKEND_API_SECRET`
+- `.maybeSingle()` замість `.single()` у `decryptKep()` (виправлено у попередній сесії)
+- Атомарна активація КЕП через `activate_kep_atomic` PostgreSQL функцію (міграція 007)
+
+### 19.3 Відкриті LOW-пріоритетні спостереження (без виправлення)
+
+| # | Спостереження | Рішення |
+|---|---|---|
+| L-1 | `aesGcmDecryptBuffer` blob parser — edge case з `:` у base64 | Прийнятно: недосяжно без компрометації БД; `parts.length !== 3` вже перевіряється |
+| L-3 | KMS client singleton не підхоплює ротацію credentials без рестарту | Прийнятно: Railway перезапускає при деплої; задокументувати в runbook ротації ключів |
+| L-4 | Stack traces у Railway logs містять шляхи до файлів контейнера | Прийнятно: логи Railway не публічні; обмежити доступ до Railway проєкту |

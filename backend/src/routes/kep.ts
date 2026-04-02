@@ -115,8 +115,8 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
         .insert({ client_id: clientId, user_id: userId, ...kepFields })
 
   if (error) {
-    // H-2: never expose raw Supabase error.message to the client
-    console.error('[kep] upsert error:', error)
+    // H-2: never expose raw Supabase error.message to the client; log only .message (not full object)
+    console.error('[kep] upsert error:', error?.message ?? String(error))
     res.status(500).json({ error: 'Помилка збереження КЕП' })
     return
   }

@@ -6,7 +6,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { backendGetKep } from '@/lib/backend'
+import { backendGetKepCredentialByClient } from '@/lib/backend'
 import { signWithKepDecrypted, getCertOrgTaxId, getCertValidTo } from '@/lib/dps/signer'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
 import { detectAlerts } from '@/lib/dps/alerts'
@@ -59,11 +59,16 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: 'KEP not configured for this client' }, { status: 400 })
   }
 
-  // Fetch and decrypt KEP via backend (supports KMS envelope + legacy AES)
+  // Fetch and decrypt KEP via backend (JWT-authenticated — userId derived from session, not request)
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session?.access_token) {
+    return NextResponse.json({ error: 'No active session' }, { status: 401 })
+  }
+
   let kepDecrypted: string
   let password: string
   try {
-    const kep = await backendGetKep(id, user.id)
+    const kep = await backendGetKepCredentialByClient(id, session.access_token)
     kepDecrypted = kep.kepData
     password = kep.password
   } catch (e) {

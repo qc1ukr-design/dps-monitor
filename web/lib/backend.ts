@@ -13,9 +13,11 @@ function getBackendConfig(): { url: string; secret: string } {
 
 /**
  * Fetch and decrypt KEP for a client from the backend.
- * Supports both KMS envelope (new) and legacy AES (old) formats transparently.
  *
- * Returns { kepData, password } — raw KEP storage string and plaintext password.
+ * @deprecated Use backendGetKepCredentialByClient() instead — it authenticates via
+ * Supabase JWT so userId is verified server-side, not trusted from the request.
+ * This legacy function is kept only for sync-all (cron) which runs as a service
+ * client without individual user JWTs. New callers must use the JWT variant.
  */
 export async function backendGetKep(
   clientId: string,
@@ -36,6 +38,42 @@ export async function backendGetKep(
     const body = await res.json().catch(() => ({}))
     throw new Error(
       (body as { error?: string }).error ?? `Backend KEP fetch failed (${res.status})`,
+    )
+  }
+
+  return res.json() as Promise<{ kepData: string; password: string }>
+}
+
+/**
+ * Fetch and decrypt the active KEP for a client via the JWT-authenticated endpoint.
+ *
+ * Unlike backendGetKep(), userId is derived from the verified Supabase JWT on the
+ * backend — never trusted from the request. Use this for all user-session contexts.
+ *
+ * Requires a valid Supabase access token (from supabase.auth.getSession()).
+ */
+export async function backendGetKepCredentialByClient(
+  clientId: string,
+  accessToken: string,
+): Promise<{ kepData: string; password: string }> {
+  const { url, secret } = getBackendConfig()
+
+  const res = await fetch(
+    `${url}/kep-credentials/by-client/${encodeURIComponent(clientId)}`,
+    {
+      headers: {
+        'X-Backend-Secret': secret,
+        'Authorization': `Bearer ${accessToken}`,
+      },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(10000),
+    },
+  )
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(
+      (body as { error?: string }).error ?? `Backend KEP credential fetch failed (${res.status})`,
     )
   }
 

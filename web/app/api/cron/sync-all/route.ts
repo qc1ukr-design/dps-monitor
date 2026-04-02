@@ -9,6 +9,13 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
+// backendGetKep is intentionally used here (not backendGetKepCredentialByClient).
+// Reason: sync-all runs as a cron with a Supabase service_role client — there are no
+// individual user sessions or JWT tokens available. backendGetKep passes userId as a
+// query param (trusted from api_tokens table, not user input) protected by CRON_SECRET
+// + BACKEND_API_SECRET chain. Migrating to JWT would require generating per-user tokens
+// server-side (supabase.auth.admin.generateLink / custom JWTs) — deferred until the
+// cron is refactored to read from kep_credentials directly.
 import { backendGetKep } from '@/lib/backend'
 import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'

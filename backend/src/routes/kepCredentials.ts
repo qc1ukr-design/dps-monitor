@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import type { Request, Response, RequestHandler } from 'express'
+import { rateLimit } from 'express-rate-limit'
 import {
   encryptKep,
   activateKep,
@@ -48,6 +49,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function isValidUuid(v: unknown): v is string {
   return typeof v === 'string' && UUID_RE.test(v)
 }
+
+// Rate limit for KMS-decrypt endpoints (each request = one AWS KMS Decrypt API call).
+// This is a server-to-server route (X-Backend-Secret required), so limit is generous
+// compared to the user-facing kepRoutes.ts (20/hr). Still prevents cost amplification
+// if BACKEND_API_SECRET is compromised. IP key is the Vercel server IP in practice —
+// the effective protection is via X-Backend-Secret; rate limit is defence-in-depth.
+const kmsDecryptRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 240,                  // ~4/min average — well above normal sync traffic
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many KEP decrypt requests, try again later' },
+})
 
 // ---------------------------------------------------------------------------
 // POST /kep-credentials/upload
@@ -166,7 +180,7 @@ router.post('/upload', authMiddleware, async (req: Request, res: Response): Prom
  *
  * Auth: Authorization: Bearer <supabase-jwt>
  */
-router.get('/by-client/:clientId', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.get('/by-client/:clientId', kmsDecryptRateLimit, authMiddleware, async (req: Request, res: Response): Promise<void> => {
   const { clientId } = req.params
   const userId = res.locals.userId as string
 
@@ -205,7 +219,7 @@ router.get('/by-client/:clientId', authMiddleware, async (req: Request, res: Res
  *
  * Auth: Authorization: Bearer <supabase-jwt>
  */
-router.get('/:kepId', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.get('/:kepId', kmsDecryptRateLimit, authMiddleware, async (req: Request, res: Response): Promise<void> => {
   const { kepId } = req.params
   const userId = res.locals.userId as string
 

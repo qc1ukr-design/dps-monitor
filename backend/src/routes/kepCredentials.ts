@@ -86,6 +86,11 @@ router.post('/upload', authMiddleware, async (req: Request, res: Response): Prom
     return
   }
 
+  if (!/^\d{8,10}$/.test(edrpou)) {
+    res.status(400).json({ error: 'edrpou має містити 8 цифр (ЄДРПОУ) або 10 цифр (РНОКПП)' })
+    return
+  }
+
   try {
     const kepFileBuffer = Buffer.from(kepData, 'utf8')
     let credential

@@ -34,6 +34,12 @@ async function decryptStored(stored: string): Promise<string> {
   return aesDecrypt(stored)
 }
 
+// UUID v4 format guard
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+function isValidUuid(v: unknown): v is string {
+  return typeof v === 'string' && UUID_RE.test(v)
+}
+
 // ---------------------------------------------------------------------------
 // POST /kep/upload
 // ---------------------------------------------------------------------------
@@ -47,8 +53,11 @@ async function decryptStored(stored: string): Promise<string> {
  *   password   — plaintext KEP password
  *   kepInfo    — { caName, ownerName, orgName?, taxId, validTo? }
  *
- * Called by /web after it validates the KEP and extracts kepInfo.
- * The raw kepData and password are encrypted here (never sent pre-encrypted).
+ * NOTE (H-1): userId is trusted from the request body — this is a legacy route
+ * protected only by X-Backend-Secret. The caller (web/app/api/clients/[id]/kep/route.ts)
+ * derives userId from a verified Supabase session, which mitigates the risk under
+ * normal operation. This route will be replaced by /kep-credentials/upload (which
+ * requires a Supabase JWT) when Крок D is executed.
  */
 router.post('/upload', async (req: Request, res: Response): Promise<void> => {
   const { clientId, userId, kepData, password, kepInfo } = req.body as {
@@ -67,6 +76,16 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
 
   if (!clientId || !userId || !kepData || !password || !kepInfo) {
     res.status(400).json({ error: 'clientId, userId, kepData, password, kepInfo are required' })
+    return
+  }
+
+  // M-2: validate UUID format before using as DB filter values
+  if (!isValidUuid(clientId)) {
+    res.status(400).json({ error: 'clientId must be a valid UUID' })
+    return
+  }
+  if (!isValidUuid(userId)) {
+    res.status(400).json({ error: 'userId must be a valid UUID' })
     return
   }
 
@@ -120,7 +139,9 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
         .insert({ client_id: clientId, user_id: userId, ...kepFields })
 
   if (error) {
-    res.status(500).json({ error: error.message })
+    // H-2: never expose raw Supabase error.message to the client
+    console.error('[kep] upsert error:', error)
+    res.status(500).json({ error: 'Помилка збереження КЕП' })
     return
   }
 
@@ -148,7 +169,7 @@ router.post('/upload', async (req: Request, res: Response): Promise<void> => {
  * Returns:
  *   { kepData: string, password: string }
  *
- * Supports both KMS envelope format (new) and legacy AES format (old).
+ * Dual-read: tries kep_credentials (new) first, falls back to api_tokens (legacy).
  * Called by /web DPS sync to get the raw KEP + password for signing.
  */
 router.get('/:clientId', async (req: Request, res: Response): Promise<void> => {
@@ -160,14 +181,28 @@ router.get('/:clientId', async (req: Request, res: Response): Promise<void> => {
     return
   }
 
+  // M-2: validate UUID format before using as DB filter values
+  if (!isValidUuid(clientId)) {
+    res.status(400).json({ error: 'clientId must be a valid UUID' })
+    return
+  }
+  if (!isValidUuid(userId)) {
+    res.status(400).json({ error: 'userId must be a valid UUID' })
+    return
+  }
+
   // ---------------------------------------------------------------------------
   // Primary path: kep_credentials (new table, per-KEP DEK, audit log)
   // ---------------------------------------------------------------------------
   let newDecrypted
   try {
     newDecrypted = await decryptKepByClientId(clientId, userId)
-  } catch {
-    // Not yet migrated — fall through to legacy api_tokens path
+  } catch (err) {
+    // M-4: log the fallback reason so Railway logs can confirm "6/6 primary path"
+    // during Крок C verification. "KEP not found" = not yet migrated (expected).
+    // Any other error = unexpected primary path failure (needs investigation).
+    const reason = err instanceof Error ? err.message : String(err)
+    console.warn('[kep] primary path miss, falling back to api_tokens:', reason, '| clientId:', clientId)
   }
 
   if (newDecrypted) {

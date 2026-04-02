@@ -26,6 +26,12 @@ import { getSupabaseClient } from '../lib/supabase.js'
 
 const router = Router()
 
+// UUID v4 format guard — prevents malformed values from reaching the DB
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+function isValidUuid(v: unknown): v is string {
+  return typeof v === 'string' && UUID_RE.test(v)
+}
+
 // ---------------------------------------------------------------------------
 // Auth middleware — validates Supabase JWT, stores userId in res.locals
 // ---------------------------------------------------------------------------
@@ -96,8 +102,8 @@ function multerSingle(fieldName: string): RequestHandler {
         return
       }
       if (err) {
-        // Unexpected error — fixed string, log internally
-        console.error('[kep] multer unexpected error:', err)
+        // Unexpected error — fixed string, log internally (H-2: only message, never full object)
+        console.error('[kep] multer unexpected error:', err instanceof Error ? err.message : String(err))
         res.status(400).json({ error: 'Помилка обробки файлу' })
         return
       }
@@ -158,7 +164,7 @@ router.post(
         createdAt:  credential.createdAt,
       })
     } catch (err) {
-      console.error('[kep] upload error:', err)
+      console.error('[kep] upload error:', err instanceof Error ? err.message : String(err))
       res.status(500).json({ error: 'Помилка завантаження КЕП' })
     } finally {
       // C-2: zero plaintext KEP bytes regardless of success or failure
@@ -176,7 +182,7 @@ router.get('/list', authMiddleware, async (_req: Request, res: Response): Promis
     const keps = await listKeps(res.locals.userId as string)
     res.json(keps)
   } catch (err) {
-    console.error('[kep] list error:', err)
+    console.error('[kep] list error:', err instanceof Error ? err.message : String(err))
     res.status(500).json({ error: 'Помилка отримання списку КЕП' })
   }
 })
@@ -188,6 +194,11 @@ router.get('/list', authMiddleware, async (_req: Request, res: Response): Promis
 router.delete('/:id', sensitiveOpRateLimit, authMiddleware, async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params
 
+  if (!isValidUuid(id)) {
+    res.status(400).json({ error: 'id must be a valid UUID' })
+    return
+  }
+
   try {
     await deleteKep(id, res.locals.userId as string)
     res.json({ success: true })
@@ -197,7 +208,7 @@ router.delete('/:id', sensitiveOpRateLimit, authMiddleware, async (req: Request,
       res.status(404).json({ error: 'КЕП не знайдено' })
       return
     }
-    console.error('[kep] delete error:', err)
+    console.error('[kep] delete error:', err instanceof Error ? err.message : String(err))
     res.status(500).json({ error: 'Помилка видалення КЕП' })
   }
 })
@@ -210,12 +221,17 @@ router.post('/:id/test', sensitiveOpRateLimit, authMiddleware, async (req: Reque
   const { id }   = req.params
   const userId   = res.locals.userId as string
 
+  if (!isValidUuid(id)) {
+    res.json({ success: false, error: 'id must be a valid UUID' })
+    return
+  }
+
   let decrypted
   try {
     decrypted = await decryptKep(id, userId)
   } catch (err) {
     // H-3: never expose err.message to the client — it may contain internal details
-    console.error('[kep] test decrypt error:', err)
+    console.error('[kep] test decrypt error:', err instanceof Error ? err.message : String(err))
     res.json({ success: false, error: 'Не вдалось розшифрувати КЕП' })
     return
   }

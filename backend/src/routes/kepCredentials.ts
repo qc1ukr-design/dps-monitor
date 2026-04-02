@@ -125,7 +125,7 @@ router.post('/upload', authMiddleware, async (req: Request, res: Response): Prom
 
     res.json({ ok: true, kepId: credential.id })
   } catch (err) {
-    console.error('[kep-credentials] upload error:', err)
+    console.error('[kep-credentials] upload error:', err instanceof Error ? err.message : String(err))
     res.status(500).json({ error: 'Помилка збереження КЕП' })
   }
 })
@@ -155,6 +155,11 @@ router.get('/by-client/:clientId', authMiddleware, async (req: Request, res: Res
     return
   }
 
+  // Security note: kepPassword is a plaintext string returned over HTTPS (enforced by Railway /
+  // Vercel TLS termination). cleanup() zeros the underlying passwordBuffer and kepFileBuffer,
+  // but the JS string copy of kepPassword passes through JSON.stringify and the HTTP write
+  // buffer before cleanup() runs. This is an inherent Node.js limitation — the V8 string is
+  // immutable and cannot be explicitly zeroed. Callers must invoke this endpoint over HTTPS only.
   try {
     const kepData = decrypted.kepFileBuffer.toString('utf8')
     const kepPassword = decrypted.kepPassword
@@ -189,6 +194,7 @@ router.get('/:kepId', authMiddleware, async (req: Request, res: Response): Promi
     return
   }
 
+  // Security note: see GET /by-client/:clientId for notes on kepPassword lifecycle.
   try {
     const kepData = decrypted.kepFileBuffer.toString('utf8')
     const kepPassword = decrypted.kepPassword
@@ -219,7 +225,7 @@ router.delete('/:kepId', authMiddleware, async (req: Request, res: Response): Pr
     await deleteKep(kepId, userId)
     res.json({ ok: true })
   } catch (err) {
-    console.error('[kep-credentials] delete error:', err)
+    console.error('[kep-credentials] delete error:', err instanceof Error ? err.message : String(err))
     res.status(500).json({ error: 'Помилка видалення КЕП' })
   }
 })
@@ -239,7 +245,7 @@ router.get('/', authMiddleware, async (_req: Request, res: Response): Promise<vo
     const keps = await listKeps(userId)
     res.json(keps)
   } catch (err) {
-    console.error('[kep-credentials] list error:', err)
+    console.error('[kep-credentials] list error:', err instanceof Error ? err.message : String(err))
     res.status(500).json({ error: 'Помилка отримання списку КЕП' })
   }
 })

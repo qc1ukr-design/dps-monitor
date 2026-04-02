@@ -49,6 +49,15 @@ export async function encryptWithKMS(plaintext: Buffer): Promise<Buffer> {
 
 /**
  * Decrypt bytes that were encrypted with encryptWithKMS().
+ *
+ * Memory safety note: `Buffer.from(Plaintext)` creates a copy of the DEK from the AWS SDK's
+ * `Uint8Array`. The caller receives and owns the copy and is responsible for zeroing it
+ * (buf.fill(0)) after use. The original `Uint8Array` returned by the AWS SDK cannot be
+ * zeroed from our code — it will be GC'd normally. This is an inherent Node.js / AWS SDK
+ * limitation. The practical risk is low because the original reference is not stored anywhere
+ * and V8 GC runs frequently, but it means in-memory forensics during the brief decrypt window
+ * could theoretically find DEK bytes in the AWS SDK object. Documented here for future
+ * reviewers; see also the analogous note on kepPassword in kepEncryptionService.ts.
  */
 export async function decryptWithKMS(ciphertext: Buffer): Promise<Buffer> {
   const { Plaintext } = await getClient().send(
@@ -80,6 +89,9 @@ export async function generateDataKey(): Promise<{
   if (!Plaintext) throw new Error('KMS GenerateDataKey returned empty Plaintext')
   if (!CiphertextBlob) throw new Error('KMS GenerateDataKey returned empty CiphertextBlob')
 
+  // Memory safety note: Buffer.from(Plaintext) copies the DEK from the AWS SDK Uint8Array.
+  // The caller must zero `plaintext` (buf.fill(0)) after use. The SDK's original Uint8Array
+  // cannot be zeroed from our code and will be GC'd. See decryptWithKMS() for full note.
   return {
     plaintext: Buffer.from(Plaintext),
     ciphertext: Buffer.from(CiphertextBlob),

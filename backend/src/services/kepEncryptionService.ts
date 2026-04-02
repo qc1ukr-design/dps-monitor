@@ -401,6 +401,16 @@ export async function decryptKepByClientId(clientId: string, userId: string): Pr
     .limit(1)
 
   if (error || !data || data.length === 0) {
+    // Write audit failure — kepId is unknown at this point (lookup failed before finding it)
+    await writeAuditLog({
+      kepId:        null,
+      userId,
+      action:       'USE_FOR_DPS',
+      success:      false,
+      errorMessage: sanitizeErrorMessage(
+        error?.message ?? 'KEP not found in kep_credentials for this client'
+      ),
+    })
     throw new Error('KEP not found in kep_credentials for this client')
   }
 
@@ -417,26 +427,21 @@ export async function deleteKep(kepId: string, userId: string): Promise<void> {
   try {
     const supabase = getSupabaseClient()
 
-    // Verify ownership before deletion
-    const { data: existingRows } = await supabase
-      .from('kep_credentials')
-      .select('id')
-      .eq('id', kepId)
-      .eq('user_id', userId)
-      .limit(1)
-
-    if (!existingRows || existingRows.length === 0) {
-      throw new KepNotFoundError()
-    }
-
-    const { error } = await supabase
+    // Ownership check and DELETE are a single atomic operation — eliminates TOCTOU window.
+    // If the row does not exist or belongs to another user, deletedRows is empty (not an error).
+    const { data: deletedRows, error } = await supabase
       .from('kep_credentials')
       .delete()
       .eq('id', kepId)
       .eq('user_id', userId)
+      .select('id')
 
     if (error) {
       throw new Error(error.message)
+    }
+
+    if (!deletedRows || deletedRows.length === 0) {
+      throw new KepNotFoundError()
     }
 
     // kep_id in audit log becomes NULL via ON DELETE SET NULL
@@ -477,6 +482,13 @@ export async function activateKep(kepId: string, clientId: string | null, userId
     .limit(1)
 
   if (!ownerCheck || ownerCheck.length === 0) {
+    await writeAuditLog({
+      kepId,
+      userId,
+      action:       'UPLOAD',
+      success:      false,
+      errorMessage: 'activateKep: KEP not found or not owned by this user',
+    })
     throw new KepNotFoundError(`KEP ${kepId} not found or not owned by user ${userId}`)
   }
 
@@ -489,8 +501,18 @@ export async function activateKep(kepId: string, clientId: string | null, userId
   })
 
   if (error) {
+    await writeAuditLog({
+      kepId,
+      userId,
+      action:       'UPLOAD',
+      success:      false,
+      errorMessage: sanitizeErrorMessage(`activateKep RPC failed: ${error.message}`),
+    })
     throw new Error(`Failed to activate KEP: ${error.message}`)
   }
+  // Success path: encryptKep() already wrote an UPLOAD success audit log entry.
+  // Logging a second UPLOAD success here would create duplicate entries per normal upload
+  // cycle. Failures are logged above to capture the "uploaded but not activated" state.
 }
 
 /**

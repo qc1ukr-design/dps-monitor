@@ -94,7 +94,8 @@ DPS-Monitor/
 │   ├── services/
 │   │   └── kepEncryptionService.ts  # НОВА таблиця kep_credentials (per-KEP DEK)
 │   ├── routes/
-│   │   ├── kep.ts                # POST /kep/upload, GET /kep/:clientId (api_tokens)
+│   │   ├── kep.ts                # POST /kep/upload (legacy, dead), GET /kep/:clientId → kep_credentials only
+│   │   ├── kepCredentials.ts     # POST /kep-credentials/upload, GET by-client/:clientId, CRUD (JWT auth)
 │   │   └── kms.ts                # GET /kms/test
 │   └── middleware/auth.ts        # X-Backend-Secret header validation
 ├── supabase/migrations/          # SQL міграції (001–006 виконано)
@@ -115,10 +116,10 @@ DPS-Monitor/
 | `dps_cache` | Кеш ДПС (profile, budget, documents, archive_flag) | ✅ Production |
 | `alerts` | Алерти (debt_change, kep_expiring, sync_stale тощо) | ✅ Production |
 | `user_settings` | telegram_chat_id, notify_telegram | ✅ Production |
-| `kep_credentials` | КЕП (per-KEP DEK, client_id + is_active додано в міграції 006) | ⚠️ Таблиця є, route відсутній |
+| `kep_credentials` | КЕП (per-KEP DEK, client_id NOT NULL, is_active, ca_name, owner_name, org_name, tax_id, valid_to — міграції 005–008) | ✅ Production, 6/6 клієнтів мігровано |
 | `kep_access_log` | Аудит операцій з КЕП | ✅ Production (RLS: INSERT=authenticated, SELECT=service_role only) |
 
-**Наступна міграція — 007** (при потребі).
+**Наступна міграція — 009** (при потребі).
 
 ---
 
@@ -216,7 +217,7 @@ DPS-Monitor/
 
 ### Для SQL міграцій:
 - Файл: `supabase/migrations/00N_description.sql`
-- Наступна: `007_...sql`
+- Наступна: `009_...sql`
 - Завжди включати: RLS policies, індекси, тригери updated_at якщо є
 - Виконувати через Supabase SQL Editor (не через CLI якщо не налаштовано)
 
@@ -290,10 +291,11 @@ DPS-Monitor/
 - [x] **Dual-read fallback** — `GET /kep/:clientId` спочатку читає `kep_credentials`, fallback на `api_tokens` ✅
 - [x] **`backendUploadKepCredential()`** — додано у `web/lib/backend.ts` ✅
 - [x] **Крок B — Backfill виконано:** 6/6 перенесено в `kep_credentials` ✅ (2026-04-02)
-- [ ] **Крок C — Верифікація:** cron sync-all 6/6, логи Railway "primary path" (не "legacy fallback"), `kep_access_log` 6 записів
-- [ ] **Крок D — Перемкнути upload:** в `kep/route.ts` замінити `POST /kep/upload` → `backendUploadKepCredential()` (одностороннє рішення)
-- [ ] **Крок E — Міграція 008** (через 1-2 тижні після Кроку C): `client_id SET NOT NULL`, видалити fallback з `routes/kep.ts`, депрекувати `kep_encrypted` в `api_tokens`
+- [x] **Крок C — Верифікація:** 6/6 `kep_credentials` активні, 7 `USE_FOR_DPS` записів у `kep_access_log`, нуль fallback-звернень ✅ (2026-04-02)
+- [x] **Крок D — Upload перемкнуто:** `kep/route.ts` → `backendUploadKepCredential()` (+ Supabase JWT, kepInfo metadata) ✅ (2026-04-02)
+- [x] **Крок E — Міграція 008 виконана:** `client_id SET NOT NULL`, cert-metadata колонки (ca_name, owner_name, org_name, tax_id, valid_to), fallback видалено з `GET /kep/:clientId` ✅ (2026-04-02)
 - [ ] **npm audit** — 4 вразливості потребують Next.js 14→16 (breaking change, відкладено)
+- [ ] **Cleanup** — `POST /kep/upload` в `kep.ts` є мертвим кодом після Кроку D; можна видалити окремим PR
 
 ---
 

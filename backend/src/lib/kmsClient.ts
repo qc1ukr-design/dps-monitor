@@ -5,6 +5,17 @@ import {
   GenerateDataKeyCommand,
 } from '@aws-sdk/client-kms'
 
+// KMSClient singleton — created once on first use and reused for all subsequent calls.
+//
+// Credential rotation note (P4): AWS credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
+// are read from process.env only at first initialization. If credentials are rotated while
+// the process is running (e.g. via Railway env-var update), the cached client continues to
+// use the old credentials until the process restarts.
+//
+// On Railway, updating env vars triggers an automatic redeployment — so rotation is safe
+// in the current setup. If dynamic credential rotation (e.g. AWS IAM Roles Anywhere, or
+// Secrets Manager rotation without redeployment) is ever introduced, this singleton must
+// be replaced with a credential-aware factory that invalidates the cache on rotation.
 let _client: KMSClient | null = null
 
 function getClient(): KMSClient {

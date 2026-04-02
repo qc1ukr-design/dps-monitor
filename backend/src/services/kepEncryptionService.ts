@@ -456,13 +456,18 @@ export async function deleteKep(kepId: string, userId: string): Promise<void> {
     // kep_id in audit log becomes NULL via ON DELETE SET NULL
     await writeAuditLog({ kepId, userId, action: 'DELETE', success: true, errorMessage: null })
   } catch (err) {
-    await writeAuditLog({
-      kepId,
-      userId,
-      action:       'DELETE',
-      success:      false,
-      errorMessage: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
-    })
+    // KepNotFoundError is a normal 404 (resource doesn't exist or belongs to another user),
+    // not a security event — skip the failure audit to avoid polluting the log with noise.
+    // All genuine errors (DB failures, unexpected exceptions) are still audited.
+    if (!(err instanceof KepNotFoundError)) {
+      await writeAuditLog({
+        kepId,
+        userId,
+        action:       'DELETE',
+        success:      false,
+        errorMessage: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
+      })
+    }
 
     throw err
   }
@@ -477,6 +482,17 @@ export async function deleteKep(kepId: string, userId: string): Promise<void> {
  *
  * If this step fails the new KEP remains inactive and the old one stays active,
  * so the client is never left without a working KEP.
+ *
+ * Data retention note (P6): when a new KEP is activated, the previous one is
+ * deactivated (is_active = false) but NOT deleted. Encrypted blobs and the
+ * KMS-wrapped DEK remain in kep_credentials indefinitely. This increases the
+ * long-term attack surface and conflicts with data minimization principles.
+ *
+ * TODO: add a cleanup migration or background job that hard-deletes rows where
+ * is_active = false AND updated_at < NOW() - INTERVAL '30 days'. A candidate
+ * implementation is a Supabase pg_cron job or a dedicated DELETE migration
+ * (e.g. 009_cleanup_inactive_kep_credentials.sql). Until then, users can
+ * explicitly delete old KEPs via DELETE /kep-credentials/:kepId.
  */
 export async function activateKep(kepId: string, clientId: string | null, userId: string): Promise<void> {
   const supabase = getSupabaseClient()

@@ -50,6 +50,18 @@ function isValidUuid(v: unknown): v is string {
   return typeof v === 'string' && UUID_RE.test(v)
 }
 
+// Rate limit for KMS-encrypt (upload) endpoint — each request triggers
+// KMS GenerateDataKey + KMS Encrypt (2 AWS API calls). Server-to-server route
+// (X-Backend-Secret required); limit is the last defence against cost amplification
+// if the secret leaks. Matches kepRoutes.ts uploadRateLimit (10/hr/IP).
+const kmsUploadRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many KEP upload requests, try again later' },
+})
+
 // Rate limit for KMS-decrypt endpoints (each request = one AWS KMS Decrypt API call).
 // This is a server-to-server route (X-Backend-Secret required), so limit is generous
 // compared to the user-facing kepRoutes.ts (20/hr). Still prevents cost amplification
@@ -79,7 +91,7 @@ const kmsDecryptRateLimit = rateLimit({
  *
  * userId is taken from the verified Supabase JWT — NOT from the request body.
  */
-router.post('/upload', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.post('/upload', kmsUploadRateLimit, authMiddleware, async (req: Request, res: Response): Promise<void> => {
   const userId = res.locals.userId as string
 
   const { clientId, kepData, password, clientName, edrpou, fileName, kepInfo } = req.body as {

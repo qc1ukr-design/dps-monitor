@@ -654,17 +654,21 @@ Telegram-тільки (email не використовується — RESEND_AP
 | 2026-04-02 | **`kepEncryptionService.ts` — Envelope Encryption сервіс** | `backend/src/services/kepEncryptionService.ts`. Функції: `encryptKep`, `decryptKep`, `deleteKep`, `listKeps`. Один унікальний DEK на кожен КЕП. DEK зануляється у всіх code paths. `cleanup()` callback для знищення розшифрованих Buffer-ів після підписання. Аудит кожної операції в `kep_access_log`. Жодного plaintext у БД або логах. Виправлено під час code review: `last_used_at` UPDATE отримав `user_id` фільтр (defense-in-depth); виправлено misleading коментар щодо zeroing JS string. |
 | 2026-04-02 | **Міграція 006: `client_id` FK у `kep_credentials`** | Виконано в Supabase SQL Editor. Додано: `client_id uuid references clients(id)` (nullable до backfill), індекс `kep_credentials_client_id_idx`, partial unique index `kep_credentials_one_active_per_client` (`WHERE is_active=true AND client_id IS NOT NULL`) — один активний КЕП на клієнта на рівні БД. |
 | 2026-04-02 | **`/kep-credentials` route + dual-read fallback** | Створено `backend/src/routes/kepCredentials.ts` (POST upload / GET by-client / GET by-id / DELETE / GET list). Зареєстровано в `routes/index.ts`. `kepEncryptionService` отримав `clientId?` в `encryptKep` і нову функцію `decryptKepByClientId`. Оновлено `GET /kep/:clientId` у `routes/kep.ts`: спочатку читає з `kep_credentials`, при відсутності — fallback на `api_tokens`. Додано `backendUploadKepCredential()` у `web/lib/backend.ts`. Створено `scripts/backfill-kep-credentials.mjs` (idempotent). |
+| 2026-04-02 | **Backfill `api_tokens` → `kep_credentials` виконано** | `node scripts/backfill-kep-credentials.mjs` — 6/6 перенесено, 0 помилок. Усі записи тепер мають per-KEP DEK у `kep_credentials`. `api_tokens` збережено як fallback. |
+| 2026-04-02 | **Public KEP REST API (`/api/kep/*`)** | Новий `backend/src/routes/kepRoutes.ts`. Auth: Supabase JWT (`Authorization: Bearer`), а не `X-Backend-Secret`. Endpoints: POST upload (multer, 5 MB, rate limit 10/год), GET list, DELETE, POST test. CORS розширено: додано `DELETE` і `Authorization`. Знайдено і виправлено баг: multer `LIMIT_FILE_SIZE` давав 500 замість 413 — додано `multerSingle()` wrapper. |
+| 2026-04-02 | **End-to-end тестування KEP REST API** | 13 тестів на production: auth enforcement, валідація полів, upload/list/delete/test повний цикл, ізоляція між юзерами, file size limit. Всі пройдено ✅. Деталі — §18. |
 
 ---
 
-## 17. Поточний стан системи (станом на 2026-04-02, сесія 5)
+## 17. Поточний стан системи (станом на 2026-04-02, сесія 6)
 
 ### ✅ Повністю завершено і стабільно
 
 | Область | Стан |
 |---|---|
 | **Шифрування КЕП** | 100% KMS envelope encryption. Всі 6 записів у `api_tokens` мігровано. Новий сервіс `kepEncryptionService.ts` — per-KEP DEK для `kep_credentials`. |
-| **`kep_credentials` + `kep_access_log`** | Таблиці створено (міграція 005). `client_id` FK + унікальний індекс додано (міграція 006). RLS активний. Route `/kep-credentials` задеплоєно. Dual-read fallback у `/kep/:clientId` активний. **Очікує:** backfill (запустити `scripts/backfill-kep-credentials.mjs` після деплою backend). |
+| **`kep_credentials` + `kep_access_log`** | Таблиці створено (міграції 005+006). RLS активний. Route `/kep-credentials` задеплоєно. Dual-read fallback активний. Backfill виконано: 6/6 записів перенесені з `api_tokens`. |
+| **Public KEP REST API** | `/api/kep/*` задеплоєно. Supabase JWT auth. End-to-end протестовано (13 тестів). Готово до підключення з фронтенду/мобільного. |
 | **Backend (Railway)** | Express.js сервіс запущений. KMS connectivity підтверджено (`/kms/test`). Авто-деплой при push у `backend/**`. |
 | **Синхронізація (cron)** | `sync-all` щодня о 04:00 UTC. Остання перевірка: 6/6 клієнтів OK, 0 помилок. |
 | **Алерти** | Борг, статус, нові документи, КЕП expiry (30 днів), stale sync (48 год) — всі типи реалізовані та задеплоєні. |
@@ -694,36 +698,15 @@ Telegram-тільки (email не використовується — RESEND_AP
 | `TOKEN_ENCRYPTION_KEY` | 64 hex символи (ротовано 2026-04-01) | Vercel + Railway |
 | `AWS_KMS_KEY_ID` | `arn:aws:kms:eu-central-1:826496717510:key/17fd8a9a-...` | Railway |
 
-### 🚦 Обов'язкові наступні кроки (в порядку виконання)
+### 🚦 Наступні кроки (в порядку виконання)
 
-> Це продовження міграції `kep_credentials`. Виконувати послідовно.
+> Кроки A і B виконано 2026-04-02. Продовження з Кроку C.
 
-**Крок A — Deploy backend** _(одразу після `git push`)_
-- Railway автоматично підхопить зміни
-- Перевірити що `/kep-credentials/upload` повертає 401 без `X-Backend-Secret` (новий route активний)
-
-**Крок B — Запустити backfill** _(після успішного деплою backend)_
-```bash
-node --env-file=backend/.env scripts/backfill-kep-credentials.mjs
-```
-Очікуваний вивід: `✅ 6 перенесено  ⏭️ 0 пропущено  ❌ 0 помилок`
-- Скрипт idempotent — безпечно перезапускати при помилках
-- `api_tokens` не змінюється — залишається як fallback
-
-**Крок C — Верифікація** _(після backfill)_
-- Перевірити cron sync-all (04:00 UTC або запустити вручну): 6/6 клієнтів, 0 помилок
-- У логах Railway: `GET /kep/:clientId` має йти через "primary path" (kep_credentials), не через "legacy fallback"
-- Перевірити `kep_access_log` у Supabase: 6 записів `USE_FOR_DPS` з `success=true`
-
-**Крок D — Перемкнути upload нових КЕП** _(після стабільної роботи Кроку C)_
-- В `web/app/api/clients/[id]/kep/route.ts`: замінити виклик `POST /kep/upload` → `backendUploadKepCredential()` (вже є в `web/lib/backend.ts`)
-- Це перемикає нові КЕП на `kep_credentials` замість `api_tokens`
-- ⚠️ Одностороннє рішення — після цього нові клієнти будуть тільки в `kep_credentials`
-
-**Крок E — Міграція 008** _(через 1-2 тижні стабільної роботи)_
-- `ALTER TABLE kep_credentials ALTER COLUMN client_id SET NOT NULL`
-- Депрекувати `kep_encrypted` / `kep_password_encrypted` в `api_tokens` (перейменувати, не дропати)
-- Видалити fallback гілку з `GET /kep/:clientId` у `routes/kep.ts`
+- [x] **Крок A** — Deploy backend з `kepCredentials.ts` ✅
+- [x] **Крок B** — Backfill: 6/6 перенесено ✅
+- [ ] **Крок C — Верифікація** — cron sync-all 6/6, логи "primary path", `kep_access_log` 6 записів `USE_FOR_DPS`
+- [ ] **Крок D — Перемкнути upload нових КЕП** — у `web/app/api/clients/[id]/kep/route.ts` замінити `POST /kep/upload` → `backendUploadKepCredential()` (⚠️ одностороннє)
+- [ ] **Крок E — Міграція 008** _(через 1-2 тижні після C)_ — `client_id SET NOT NULL`, депрекувати `kep_encrypted` в `api_tokens`, видалити fallback
 
 ---
 
@@ -732,3 +715,77 @@ node --env-file=backend/.env scripts/backfill-kep-credentials.mjs
 - **`kep_password_encrypted`** — колонка активно використовується backend (читання + запис); _не видаляти_ до завершення Кроку E.
 - **npm вразливості** — 3 з 7 виправлено (`npm audit fix`). Решта 4 потребують Next.js 14→16 (breaking); відкладено.
 - **Нові функції** — за потребою замовника
+
+---
+
+## 18. Public KEP REST API (`/api/kep/*`)
+
+Файл: `backend/src/routes/kepRoutes.ts`. Зареєстровано в `routes/index.ts` як `router.use('/api/kep', kepRoutesRouter)`.
+
+**Відрізняється від `/kep` і `/kep-credentials`:** ті захищені `X-Backend-Secret` (internal service), цей — відкритий для браузера/мобільного через Supabase JWT.
+
+### 18.1 Аутентифікація
+
+```
+Authorization: Bearer <supabase-access-token>
+```
+
+Middleware `authMiddleware` викликає `supabase.auth.getUser(token)` → зберігає `userId` у `res.locals.userId`. При невалідному або відсутньому токені → 401.
+
+### 18.2 Endpoints
+
+| Метод | Шлях | Опис | Вхідні дані |
+|---|---|---|---|
+| `POST` | `/api/kep/upload` | Завантажити і зашифрувати КЕП | multipart/form-data: `file` (max 5MB), `password`, `clientName`, `edrpou` (8 або 10 цифр), `clientId?` (UUID) |
+| `GET` | `/api/kep/list` | Список КЕП поточного юзера | — |
+| `DELETE` | `/api/kep/:id` | Видалити КЕП | — |
+| `POST` | `/api/kep/:id/test` | Тест розшифровки (без ДПС) | — |
+
+**POST /api/kep/upload — відповідь (201):**
+```json
+{ "id": "uuid", "clientName": "...", "edrpou": "...", "fileName": "...", "createdAt": "..." }
+```
+
+**GET /api/kep/list — відповідь:**
+```json
+[{ "id", "clientName", "edrpou", "fileName", "fileSize", "isActive", "lastUsedAt", "createdAt", "updatedAt" }]
+```
+Blob-поля (`encrypted_kep_blob`, `encrypted_dek` тощо) **ніколи** не повертаються.
+
+**POST /api/kep/:id/test — відповідь:**
+```json
+{ "success": true, "clientName": "...", "edrpou": "..." }
+// або
+{ "success": false, "error": "KEP not found or not active" }
+```
+
+### 18.3 Rate limiting і обмеження
+
+| Параметр | Значення |
+|---|---|
+| Upload rate limit | 10 запитів / годину / IP |
+| Максимальний розмір файлу | 5 MB |
+| File storage | RAM тільки (multer `memoryStorage`) — на диск не пишеться |
+| Перевищення розміру | HTTP 413 |
+
+### 18.4 Результати тестування (2026-04-02, production)
+
+Тести виконувались на `https://dps-monitor-production.up.railway.app` з реальними тестовими юзерами (створені через Supabase admin API, видалені після тестів).
+
+| # | Тест | Очікувано | Результат |
+|---|---|---|---|
+| 1 | GET/POST/DELETE/POST без токена | 401 на всіх | ✅ |
+| 2 | Невалідний Bearer токен | 401 | ✅ |
+| 3 | Upload без файлу (з валідним токеном) | 400 "Файл КЕП обов'язковий" | ✅ |
+| 4 | Upload без поля `password` | 400 | ✅ |
+| 5 | Upload з `edrpou` = 7 цифр | 400 "має містити 8 або 10 цифр" | ✅ |
+| 6 | Upload коректного файлу | 201 + `{id, edrpou, fileName, createdAt}` | ✅ |
+| 7 | GET /list після upload | Масив 1 елемент, без blob-полів | ✅ |
+| 8 | POST /:id/test | `{success: true, edrpou: "..."}` | ✅ |
+| 9 | DELETE /:id | `{success: true}` | ✅ |
+| 10 | DELETE вже видаленого | 404 | ✅ |
+| 11 | POST /:id/test після видалення | `{success: false, error: "..."}` | ✅ |
+| 12 | Upload файлу > 5 MB | 413 | ✅ (баг: спочатку 500, виправлено `multerSingle()`) |
+| 13 | User2 пробує DELETE/test KEP user1 | 404 / `success: false` | ✅ |
+
+**Баг знайдений під час тестування:** multer `LIMIT_FILE_SIZE` error не перехоплювався → 500. Виправлено wrapper-функцією `multerSingle()` яка ловить `MulterError` і маппить `LIMIT_FILE_SIZE` → 413.

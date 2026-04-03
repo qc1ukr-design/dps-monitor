@@ -28,7 +28,9 @@ export async function backendGetKep(
     {
       headers: { 'X-Backend-Secret': secret },
       cache: 'no-store',
-      signal: AbortSignal.timeout(10000),
+      // 30s timeout — Railway free tier may cold-start in 15-25s when called by
+      // cron at 04:00 UTC after hours of inactivity. 10s was too short.
+      signal: AbortSignal.timeout(30000),
     },
   )
 

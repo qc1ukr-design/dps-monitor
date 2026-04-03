@@ -9,13 +9,9 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-// backendGetKep is intentionally used here (not backendGetKepCredentialByClient).
-// Reason: sync-all runs as a cron with a Supabase service_role client — there are no
-// individual user sessions or JWT tokens available. backendGetKep passes userId as a
-// query param (trusted from api_tokens table, not user input) protected by CRON_SECRET
-// + BACKEND_API_SECRET chain. Migrating to JWT would require generating per-user tokens
-// server-side (supabase.auth.admin.generateLink / custom JWTs) — deferred until the
-// cron is refactored to read from kep_credentials directly.
+// backendGetKep is used here (not backendGetKepCredentialByClient) because sync-all
+// runs as a cron with a Supabase service_role client — no individual user JWTs available.
+// userId is NOT passed — the backend resolves it from the kep_credentials row.
 import { backendGetKep } from '@/lib/backend'
 import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
@@ -53,11 +49,14 @@ export async function GET(request: NextRequest) {
   let alertsCreated = 0
   const clientResults: Record<string, unknown> = {}
 
-  // ── Fetch all tokens with KEP ─────────────────────────────────────────────
+  // ── Fetch all active KEPs from kep_credentials ───────────────────────────
+  // Previously read from api_tokens — migrated here so new KEP uploads (which
+  // write to kep_credentials only) are picked up automatically.
   const { data: tokens, error: tokensError } = await supabase
-    .from('api_tokens')
-    .select('client_id, user_id, kep_tax_id, kep_valid_to')
-    .not('kep_encrypted', 'is', null)
+    .from('kep_credentials')
+    .select('client_id, user_id, tax_id, valid_to')
+    .eq('is_active', true)
+    .not('client_id', 'is', null)
 
   if (tokensError) {
     return NextResponse.json({ error: tokensError.message }, { status: 500 })
@@ -106,7 +105,7 @@ export async function GET(request: NextRequest) {
     try {
       // Fetch and decrypt KEP via backend (userId resolved server-side from kep_credentials)
       const { kepData: kepDecrypted, password } = await backendGetKep(clientId)
-      const taxId = token.kep_tax_id?.trim() ?? ''
+      const taxId = token.tax_id?.trim() ?? ''
       if (!taxId) { errors++; continue }
 
       // Sign
@@ -246,12 +245,12 @@ export async function GET(request: NextRequest) {
   }
 
   // ── KEP expiry check ─────────────────────────────────────────────────────
-  // Runs after all client syncs. Checks kep_valid_to for each token and sends
+  // Runs after all client syncs. Checks valid_to for each token and sends
   // a warning if expiring within 30 days or already expired.
   // Deduplication: skips if a kep_expiring/kep_expired alert was already created
   // in the last 6 days for that client (to avoid daily spam).
   const kepAlertClientIds = tokens
-    .filter(t => t.kep_valid_to)
+    .filter(t => t.valid_to)
     .map(t => t.client_id)
 
   const { data: recentKepAlerts } = kepAlertClientIds.length
@@ -267,10 +266,10 @@ export async function GET(request: NextRequest) {
   const cronNow = new Date()
 
   for (const token of tokens) {
-    if (!token.kep_valid_to) continue
+    if (!token.valid_to) continue
     if (recentKepAlertSet.has(token.client_id)) continue
 
-    const validTo = new Date(token.kep_valid_to)
+    const validTo = new Date(token.valid_to)
     const msLeft = validTo.getTime() - cronNow.getTime()
     const daysLeft = Math.ceil(msLeft / (24 * 60 * 60 * 1000))
 
@@ -296,7 +295,7 @@ export async function GET(request: NextRequest) {
       client_id: token.client_id,
       type: alertType,
       message,
-      data: { daysLeft, validTo: token.kep_valid_to },
+      data: { daysLeft, validTo: token.valid_to },
       is_read: false,
     })
     alertsCreated++

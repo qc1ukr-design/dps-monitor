@@ -284,25 +284,23 @@ DPS-Monitor/
 
 ## 12. Поточні відкриті задачі (станом на 2026-04-03, сесія 10)
 
-Міграція `kep_credentials` та технічний борг — **повністю закрито**:
+Всі технічні борги закрито. Система стабільна в production.
 
-- [x] **Міграції 005–008** — `kep_credentials`, `kep_access_log`, `client_id NOT NULL`, cert-metadata колонки ✅
+- [x] **Міграції 005–010** — `kep_credentials`, `kep_access_log`, `client_id NOT NULL`, cert-metadata, pg_cron cleanup, KEP_TEST action ✅
 - [x] **`/kep-credentials` route + `/api/kep/*` route** — задеплоєно ✅
 - [x] **Backfill:** 6/6 перенесено в `kep_credentials` ✅
-- [x] **Верифікація:** cron 6/6 OK, 7 `USE_FOR_DPS` у `kep_access_log` ✅
-- [x] **Upload перемкнуто:** `backendUploadKepCredential()` з JWT + kepInfo ✅
 - [x] **Fallback на `api_tokens` видалено** ✅
 - [x] **Security audit P1–P5** — нуль відкритих вразливостей ✅ (2026-04-03)
-- [x] **Cleanup** — мертвий comment видалено з `kep.ts` ✅ (2026-04-03)
 - [x] **Next.js 14 → 16, ESLint 8 → 9** — задеплоєно в production ✅ (2026-04-03)
-- [x] **npm audit** — 0 вразливостей після Next.js 16 ✅ (2026-04-03)
-- [x] **`web/middleware.ts` → `web/proxy.ts`** — Next.js 16 deprecation виправлено, функція перейменована на `proxy` ✅ (2026-04-03)
-- [x] **KEP UI на фронтенді** — повністю реалізовано в `dashboard/client/[id]/settings/page.tsx` ✅
+- [x] **`web/middleware.ts` → `web/proxy.ts`** — Next.js 16 convention, функція `proxy()` ✅ (2026-04-03)
+- [x] **KEP UI** — `KepUploadForm.tsx` drag & drop, підключено до `settings/page.tsx` ✅ (2026-04-03)
+- [x] **fix(cron)** — `sync-all` читає клієнтів з `kep_credentials`, таймаут 30 с ✅ (2026-04-03)
 
 **Наступна міграція — 011** (при потребі).
 
-**Наступні кроки:**
-1. Мобільний застосунок (`mobile/`) — React Native / Expo, використовує `/api/kep/*`
+**Наступні кроки (з чого починати наступну сесію):**
+1. **Верифікувати cron** — 2026-04-04 о 04:00 UTC перевірити Vercel Function Logs для `api/cron/sync-all`. Всі 6 клієнтів мають бути `ok: true`, включаючи АМОЛІТ ПЛЮС і МАРЬЯНЕНКО.
+2. **Мобільний застосунок (`mobile/`)** — React Native / Expo, директорія наявна, ще порожня. Використовує Supabase Auth + `/api/kep/*` + `/api/clients/*`.
 
 ---
 

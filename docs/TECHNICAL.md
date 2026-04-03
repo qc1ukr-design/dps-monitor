@@ -1,6 +1,6 @@
 # DPS-Monitor — Технічна документація
 
-> Останнє оновлення: 2026-04-03 (сесія 9)
+> Останнє оновлення: 2026-04-03 (сесія 10)
 
 ---
 
@@ -428,7 +428,7 @@ export async function backendGetKep(clientId: string): Promise<{ kepData: string
 - `web/app/api/clients/[id]/sync/route.ts`
 - `web/app/api/cron/sync-all/route.ts`
 
-Timeout: 10 секунд. Кидає `Error` при non-2xx або timeout.
+Timeout: **30 секунд** (збільшено з 10 с у сесії 10 — Railway free tier cold start при виклику о 04:00 UTC займає 15-25 с). Кидає `Error` при non-2xx або timeout.
 
 ### 11.7 `backend/src/services/kepEncryptionService.ts` — Envelope Encryption сервіс
 
@@ -583,11 +583,13 @@ data      = { "archived": true }
 
 ### 14.1 sync-all (`/api/cron/sync-all`)
 
+**Джерело клієнтів:** `kep_credentials WHERE is_active = true AND client_id IS NOT NULL` (мігровано з `api_tokens` у сесії 10 — нові KEP-uploads пишуть тільки в `kep_credentials`).
+
 Для кожного клієнта з KEP:
 1. Викликає backend `GET /kep/:clientId` → отримує розшифрований КЕП і пароль; підписує, отримує `payer_card` + `ta/splatp` + `post/incoming`
 2. Порівнює з кешем → вставляє алерти в `alerts`
 3. Відправляє Telegram + email якщо є нові алерти
-4. Перевіряє `kep_valid_to` → `kep_expiring`/`kep_expired` алерти (дедуп 6 днів)
+4. Перевіряє `valid_to` (з `kep_credentials`) → `kep_expiring`/`kep_expired` алерти (дедуп 6 днів)
 5. Для клієнтів, що не синхронізувались > 48 год → `sync_stale` алерт (дедуп 6 днів)
 
 ### 14.2 weekly-digest (`/api/cron/weekly-digest`)
@@ -670,28 +672,33 @@ Telegram-тільки (email не використовується — RESEND_AP
 | 2026-04-02 | **Міграція kep_credentials: кроки C→E завершено** | **Крок C** (верифікація): cron sync-all 6/6 OK, `kep_access_log` — 7 записів `USE_FOR_DPS`, нуль fallback. **Крок D** (upload перемкнуто): `kep/route.ts` тепер викликає `backendUploadKepCredential()` з JWT + kepInfo metadata. **Крок E** (міграція 008): `client_id SET NOT NULL`, cert-metadata колонки (ca_name, owner_name, org_name, tax_id, valid_to), fallback на `api_tokens` видалено з `GET /kep/:clientId`. |
 | 2026-04-03 | **Security audit P1–P5 (сесія 8): всі вразливості закрито** | 22 Jest-тести у `kepSecurity.test.ts`. **P1** — `railway.toml` hardening comment (Node.js heap memory window). **P2.1** — ownership check `clients.user_id` у `POST /kep-credentials/upload` (захист від KEP substitution attack). **P3.1** — `aes.ts`: `key.fill(0)` у `finally` після scrypt. **P3.2** — KMS singleton: `getClient()` з `kmsClient.ts` — видалено дублікат у `kms.ts`. **P3.3** — CORS: видалено мертвий заголовок `X-User-Id`. **P3.4** — `decryptKep` отримав optional `action` param; `POST /api/kep/:id/test` пише `KEP_TEST` в audit log (не `USE_FOR_DPS`); міграція 010 виконана. **P4.1** — rate limit 100→30 req/min/IP. **P5.1** — test UUID v4 у `kepSecurity.test.ts`. **P5.2** — utf8/jkurwa коментар у `GET /kep/:clientId`. **P5.3** — HMAC-SHA256 constant-time порівняння в `auth.ts` (усуває length-timing leak). Коміт `8dcdd6c`, задеплоєно на Railway + Vercel. |
 | 2026-04-03 | **Cleanup: мертвий код видалено, документацію оновлено** | Прибрано comment-некролог `NOTE: POST /kep/upload was removed` з `kep.ts`. TECHNICAL.md оновлено до поточного стану (сесія 8). CLAUDE.md: міграція kep_credentials позначена як 100% завершена. |
+| 2026-04-03 | **`web/middleware.ts` → `web/proxy.ts` (Next.js 16)** | Next.js 16 вимагає функцію `proxy()` у файлі `proxy.ts` (не `middleware()` у `middleware.ts`). Файл перейменовано, функцію перейменовано. Суть логіки незмінна: Supabase auth guard для всіх маршрутів крім `/login`, `/register`, `/forgot-password`, `/api/cron/`, статичних ресурсів. Коміт `fd7a13c` (2026-04-03, сесія 10). |
+| 2026-04-03 | **KEP Upload UI — `KepUploadForm.tsx` + підключення** | Новий React-компонент `web/app/dashboard/client/[id]/settings/KepUploadForm.tsx`. Drag & drop зона (підтримувані формати: `.jks, .p12, .pfx, .dat, .cer, .crt, .zs2, .zs3, .zs1, .sk, .zip`), кілька файлів одночасно, захист пароля (`autoComplete="off"`, пароль зануляється після успіху). Security: валідація типу файлу з повідомленням при непідтримуваному форматі, обробка мережевих і серверних помилок. Підключено до `settings/page.tsx`: замінило ~80 рядків inline-форми. `handleKepSuccess` конвертує `KepInfo` → `KepStatus` (`null → undefined`). Race condition guard: `showUploadForm = kepStatus !== null && (!kepStatus.configured || showReplaceForm)`. Коміт `fd7a13c` (2026-04-03, сесія 10). |
+| 2026-04-03 | **Security + Code Review findings (сесія 10)** | P2-01: валідація розміру файлів і кількості у `kep/route.ts` (max 5 файлів, max ~112 KB кожен). P2-02: `e instanceof Error ? e.message.slice(0, 200) : 'KEP parse error'` замість `String(e)` у всіх 3 catch-блоках. WARN-01: `res.json()` обгорнуто в `try/catch` (обробка 502/504). WARN-02: split guard для base64 `if (!base64)`. WARN-03: повідомлення при непідтримуваному типі файлу. WARN-04: `if (res.ok)` перед оновленням стану `handleDeleteToken`. WARN-05: race condition guard `kepStatus !== null`. |
+| 2026-04-03 | **fix(cron): cron читає клієнтів з `kep_credentials`, таймаут 30 с** | Два баги зупинили синхронізацію АМОЛІТ ПЛЮС і МАРЬЯНЕНКО з 1 квітня (коли `fca0ddb` переключив cron на backendGetKep). **Баг 1 (архітектура):** `sync-all` запитував список клієнтів з `api_tokens WHERE kep_encrypted IS NOT NULL`, але нові KEP-uploads пишуться тільки в `kep_credentials`. Виправлено: запит перенесено до `kep_credentials WHERE is_active=true AND client_id IS NOT NULL`; поля `kep_tax_id`/`kep_valid_to` замінено на `tax_id`/`valid_to`. **Баг 2 (Railway cold start):** `backendGetKep` мав 10-секундний таймаут. Railway засинає після ~15 хв бездіяльності і прокидається 15-25 с — перші 1-2 клієнти в черзі таймаутились щоранку о 04:00 UTC. Таймаут збільшено до 30 с. Коміт `4f0a24f`, задеплоєно 2026-04-03 (сесія 10). |
 | 2026-04-03 | **Next.js 14 → 16 + ESLint 8 → 9 (сесія 9)** | Оновлено `next` до `16.2.2`, `eslint` до `9.x`, `eslint-config-next` до `16.2.2`. Видалено `.eslintrc.json`, створено `eslint.config.mjs` з нативним flat config (`eslint-config-next@16` більше не потребує FlatCompat). `next.config.mjs`: `serverComponentsExternalPackages` (experimental) → `serverExternalPackages` (top-level); додано `turbopack.root` для коректного визначення workspace у монорепо. Видалено застарілі `eslint-disable` коментарі з `signer.ts` і `dps-auth.ts`. **Критичний fix:** Next.js 16 генерує статичну HTML-оболонку для `'use client'`-сторінок під час build — `createClient()` на рівні тіла компонента кидав помилку (відсутні Supabase env vars у Preview). Виправлено: `createClient()` перенесено всередину обробників подій (`handleLogin`, `handleForgotPassword`, `handleRegister`, `handleSubmit`) у 4 auth-сторінках. npm вразливості закрито (були пов'язані саме з Next.js 14). Гілку `upgrade/nextjs-16` змержено в `main`, задеплоєно на `dps-monitor.vercel.app`. Backup: `git tag stable-2026-04-03` + zip-архів. |
 
 ---
 
-## 17. Поточний стан системи (станом на 2026-04-03, сесія 9)
+## 17. Поточний стан системи (станом на 2026-04-03, сесія 10)
 
 ### ✅ Повністю завершено і стабільно
 
 | Область | Стан |
 |---|---|
 | **Шифрування КЕП** | 100% KMS envelope encryption. Всі 6 записів у `api_tokens` мігровано. Новий сервіс `kepEncryptionService.ts` — per-KEP DEK для `kep_credentials`. |
-| **`kep_credentials` + `kep_access_log`** | Таблиці створено (міграції 005+006). RLS активний. Route `/kep-credentials` задеплоєно. Dual-read fallback активний. Backfill виконано: 6/6 записів перенесені з `api_tokens`. |
-| **Public KEP REST API** | `/api/kep/*` задеплоєно. Supabase JWT auth. End-to-end протестовано (13 тестів). Готово до підключення з фронтенду/мобільного. |
-| **Backend (Railway)** | Express.js сервіс запущений. KMS connectivity підтверджено (`/kms/test`). Авто-деплой при push у `backend/**`. |
-| **Синхронізація (cron)** | `sync-all` щодня о 04:00 UTC. Остання перевірка: 6/6 клієнтів OK, 0 помилок. |
+| **`kep_credentials` + `kep_access_log`** | Таблиці створено (міграції 005–010). RLS активний. Backfill виконано: 6/6 записів. Fallback на `api_tokens` видалено. |
+| **Public KEP REST API** | `/api/kep/*` задеплоєно. Supabase JWT auth. End-to-end протестовано (13 тестів). |
+| **KEP UI (Dashboard)** | `KepUploadForm` — drag & drop, кілька файлів, інформаційне повідомлення після успіху. Підключено до `settings/page.tsx`. Завантаження йде через `kep_credentials`. |
+| **Backend (Railway)** | Express.js сервіс запущений. KMS connectivity підтверджено. Авто-деплой при push у `backend/**`. |
+| **Синхронізація (cron)** | `sync-all` щодня о 04:00 UTC. Клієнти тепер читаються з `kep_credentials` (не `api_tokens`). Railway timeout збільшено до 30 с. Виправлено причину несинхронізації АМОЛІТ ПЛЮС і МАРЬЯНЕНКО — задеплоєно 2026-04-03. |
 | **Алерти** | Борг, статус, нові документи, КЕП expiry (30 днів), stale sync (48 год) — всі типи реалізовані та задеплоєні. |
 | **Telegram-нотифікації** | Бот `8716647020` активний. Щоденні алерти + тижневий дайджест (пн 08:00 UTC). |
 | **Dashboard** | Таблиця з фільтрами/сортуванням/архівом. Колонка "КЕП до" з кольоровим індикатором. |
 | **Excel-експорт** | 8 колонок у зведеному звіті, включаючи "КЕП дійсний до" з кольором. |
-| **Безпека секретів** | Всі секрети ротовано після виявлення витоку. `.gitignore` захищає від повторення. Supabase мігровано на новий формат ключів (`sb_publishable_` / `sb_secret_`). |
-| **Security audit КЕП** | Два повних аудити (сесії 7 та 8). Всього 22 Jest-тести. **Нуль відкритих вразливостей.** Остання серія P1–P5 закрита в коміті `8dcdd6c` (2026-04-03). Деталі — §16 хронологія 2026-04-02 та 2026-04-03. |
-| **Next.js 16 + ESLint 9** | `next@16.2.2`, ESLint flat config. `npm audit` — 0 вразливостей. `createClient()` ініціалізується тільки в обробниках подій (SSR-safe). Задеплоєно в `main`, production ✅ (сесія 9). |
+| **Безпека секретів** | Всі секрети ротовано. `.gitignore` захищає від повторення. |
+| **Security audit КЕП** | Два повних аудити + code review (сесії 7, 8, 10). 22 Jest-тести. **Нуль відкритих вразливостей.** |
+| **Next.js 16 + ESLint 9** | `next@16.2.2`, ESLint flat config. `npm audit` — 0 вразливостей. `proxy.ts` замінює `middleware.ts` (Next.js 16 convention). |
 
 ### 🌐 Продакшн URL
 
@@ -728,13 +735,11 @@ Telegram-тільки (email не використовується — RESEND_AP
 
 ### 💡 Наступні кроки (в порядку пріоритетності)
 
-1. **`middleware.ts` → перейменувати на `proxy.ts`** — Next.js 16 вважає `middleware.ts` застарілою назвою (deprecation warning у build log). Не блокує роботу, але варто виправити в наступній сесії. Файл: `web/middleware.ts`.
+1. **Мобільний застосунок (`mobile/`)** — React Native / Expo, директорія наявна але ще порожня. Використовує `/api/kep/*` (Supabase JWT) та `/api/clients/*`. Наступна велика фіча.
 
-2. **Підключення KEP UI на фронтенді** — Public KEP REST API (`/api/kep/*`) задеплоєно і протестовано, але UI-форма для завантаження/заміни КЕП через браузер поки відсутня. Поточний флоу — ручне завантаження через Settings. Можна побудувати повноцінний UI в `dashboard/client/[id]/settings/`.
+2. **Верифікація cron після виправлення** — 2026-04-04 о 04:00 UTC перевірити Vercel Function Logs для `sync-all`: переконатись що всі 6 клієнтів (включаючи АМОЛІТ ПЛЮС і МАРЬЯНЕНКО) мають `ok: true` у `results`.
 
-3. **Мобільний застосунок (`mobile/`)** — директорія є, React Native / Expo структура наявна. Ще не розпочинали активну розробку. Може використовувати Public KEP REST API для управління КЕП з телефону.
-
-4. **Нові функції** — за потребою замовника (наприклад: нові типи алертів, розширений Excel-звіт, інтеграції).
+3. **Нові функції** — за потребою замовника (нові типи алертів, розширений Excel-звіт, інтеграції).
 
 ---
 

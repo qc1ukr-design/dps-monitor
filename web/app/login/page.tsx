@@ -14,12 +14,12 @@ export default function LoginPage() {
   const [resetSent, setResetSent] = useState(false)
   const [resetLoading, setResetLoading] = useState(false)
   const router = useRouter()
-  const supabase = createClient()
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
     setError('')
+    const supabase = createClient()
 
     const { error } = await supabase.auth.signInWithPassword({ email, password })
 
@@ -39,6 +39,7 @@ export default function LoginPage() {
     }
     setResetLoading(true)
     setError('')
+    const supabase = createClient()
 
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: `${window.location.origin}/auth/callback?type=recovery`,

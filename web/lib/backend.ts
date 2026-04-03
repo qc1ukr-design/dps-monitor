@@ -14,19 +14,17 @@ function getBackendConfig(): { url: string; secret: string } {
 /**
  * Fetch and decrypt KEP for a client from the backend.
  *
- * @deprecated Use backendGetKepCredentialByClient() instead — it authenticates via
- * Supabase JWT so userId is verified server-side, not trusted from the request.
- * This legacy function is kept only for sync-all (cron) which runs as a service
- * client without individual user JWTs. New callers must use the JWT variant.
+ * Used only by sync-all (cron) which runs as a service client without individual
+ * user JWTs. userId is NOT passed — the backend reads it from kep_credentials.
+ * New callers must use backendGetKepCredentialByClient() (JWT-authenticated).
  */
 export async function backendGetKep(
   clientId: string,
-  userId: string,
 ): Promise<{ kepData: string; password: string }> {
   const { url, secret } = getBackendConfig()
 
   const res = await fetch(
-    `${url}/kep/${encodeURIComponent(clientId)}?userId=${encodeURIComponent(userId)}`,
+    `${url}/kep/${encodeURIComponent(clientId)}`,
     {
       headers: { 'X-Backend-Secret': secret },
       cache: 'no-store',

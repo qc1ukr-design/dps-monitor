@@ -104,8 +104,8 @@ export async function GET(request: NextRequest) {
     const clientName = clientMap.get(clientId) ?? clientId
 
     try {
-      // Fetch and decrypt KEP via backend
-      const { kepData: kepDecrypted, password } = await backendGetKep(clientId, userId)
+      // Fetch and decrypt KEP via backend (userId resolved server-side from kep_credentials)
+      const { kepData: kepDecrypted, password } = await backendGetKep(clientId)
       const taxId = token.kep_tax_id?.trim() ?? ''
       if (!taxId) { errors++; continue }
 

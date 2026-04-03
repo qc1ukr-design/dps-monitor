@@ -353,7 +353,7 @@ describe('Suite 2: Encrypt → Decrypt round-trip preserves original data', () =
     })
 
     // KepCredential не повинен містити жодного з цих полів
-    const resultAsRecord = result as Record<string, unknown>
+    const resultAsRecord = result as unknown as Record<string, unknown>
     expect(resultAsRecord['encrypted_kep_blob']).toBeUndefined()
     expect(resultAsRecord['encrypted_password_blob']).toBeUndefined()
     expect(resultAsRecord['encrypted_dek']).toBeUndefined()

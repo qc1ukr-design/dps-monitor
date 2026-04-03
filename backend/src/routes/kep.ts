@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import type { Request, Response } from 'express'
-import { decryptKepByClientId } from '../services/kepEncryptionService.js'
+import { decryptKepByClientIdInternal } from '../services/kepEncryptionService.js'
 
 // NOTE: POST /kep/upload was removed (2026-04-02, Крок D cleanup).
 // New uploads go to POST /kep-credentials/upload (JWT-authenticated).
@@ -19,45 +19,26 @@ function isValidUuid(v: unknown): v is string {
 /**
  * Retrieve and decrypt KEP for a client.
  *
- * Query params:
- *   userId — UUID of the Supabase user
- *
  * Returns:
  *   { kepData: string, password: string }
  *
- * Called by sync-all cron (web/app/api/cron/sync-all/route.ts) which runs
- * as a service_role client and does not have individual user JWTs.
+ * Called by sync-all cron (web/app/api/cron/sync-all/route.ts).
  *
- * Security note (P5): userId is trusted from the query param, not from a JWT.
- * This is protected by X-Backend-Secret + CRON_SECRET chain. The userId value
- * comes from api_tokens table (server-side), not user input. Migration path:
- * when sync-all is refactored to read kep_credentials directly, this route
- * should be removed and replaced by GET /kep-credentials/by-client/:clientId
- * (JWT-authenticated, userId derived server-side from verified token).
- *
- * Крок E (2026-04-02): reads exclusively from kep_credentials.
+ * Security: userId is NOT accepted from the request — it is read from the
+ * kep_credentials row by decryptKepByClientId(). This eliminates the P5 risk
+ * of trusting a caller-supplied userId. The route is protected by X-Backend-Secret.
  */
 router.get('/:clientId', async (req: Request, res: Response): Promise<void> => {
   const { clientId } = req.params
-  const { userId } = req.query as { userId?: string }
-
-  if (!userId) {
-    res.status(400).json({ error: 'userId query param is required' })
-    return
-  }
 
   if (!isValidUuid(clientId)) {
     res.status(400).json({ error: 'clientId must be a valid UUID' })
     return
   }
-  if (!isValidUuid(userId)) {
-    res.status(400).json({ error: 'userId must be a valid UUID' })
-    return
-  }
 
   let decrypted
   try {
-    decrypted = await decryptKepByClientId(clientId, userId)
+    decrypted = await decryptKepByClientIdInternal(clientId)
   } catch {
     res.status(404).json({ error: 'KEP not found' })
     return

@@ -154,7 +154,7 @@ function sanitizeErrorMessage(msg: string): string {
 /** Write a log entry to kep_access_log — never throws (errors are swallowed). */
 async function writeAuditLog(entry: {
   kepId:        string | null
-  userId:       string
+  userId:       string | null
   action:       'UPLOAD' | 'USE_FOR_DPS' | 'DELETE' | 'VIEW_LIST'
   success:      boolean
   errorMessage: string | null
@@ -385,17 +385,9 @@ export async function decryptKep(kepId: string, userId: string): Promise<Decrypt
 /**
  * Convenience wrapper: look up the active KEP for a client, then decrypt it.
  *
- * Used by the sync flow which only knows clientId, not kepId.
- * Throws if no active kep_credentials row exists for this client.
- *
- * Ownership invariant: the SELECT filters on BOTH client_id AND user_id, so a row
- * can only be found when it was originally written with user_id matching the caller.
- * The application layer (encryptKep / POST /upload) is responsible for ensuring
- * that client_id belongs to userId — verified via the `clients` table query in the
- * web API route before any insert. There is no DB-level cross-column FK enforcing
- * this; it is an application-enforced invariant. If a future migration or admin
- * script inserts rows without this check, the double WHERE clause here still prevents
- * cross-user data access at read time.
+ * Used by JWT-authenticated routes (GET /kep-credentials/by-client/:clientId).
+ * Filters on BOTH client_id AND user_id — ownership is enforced at the DB level.
+ * Throws if no active kep_credentials row exists for this client+user combination.
  */
 export async function decryptKepByClientId(clientId: string, userId: string): Promise<DecryptedKep> {
   const supabase = getSupabaseClient()
@@ -424,6 +416,42 @@ export async function decryptKepByClientId(clientId: string, userId: string): Pr
   }
 
   return decryptKep(data[0].id, userId)
+}
+
+/**
+ * Internal variant used by the sync-all cron route (GET /kep/:clientId).
+ *
+ * Does NOT accept userId — reads it directly from the kep_credentials row.
+ * This eliminates the P5 risk of trusting a caller-supplied userId value.
+ * Safe because this route is protected by X-Backend-Secret and is only called
+ * by the Vercel cron via the CRON_SECRET → BACKEND_API_SECRET chain.
+ */
+export async function decryptKepByClientIdInternal(clientId: string): Promise<DecryptedKep> {
+  const supabase = getSupabaseClient()
+
+  const { data, error } = await supabase
+    .from('kep_credentials')
+    .select('id, user_id')
+    .eq('client_id', clientId)
+    .eq('is_active', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  if (error || !data || data.length === 0) {
+    await writeAuditLog({
+      kepId:        null,
+      userId:       null,
+      action:       'USE_FOR_DPS',
+      success:      false,
+      errorMessage: sanitizeErrorMessage(
+        error?.message ?? 'KEP not found in kep_credentials for this client'
+      ),
+    })
+    throw new Error('KEP not found in kep_credentials for this client')
+  }
+
+  const { id: kepId, user_id: userId } = data[0] as { id: string; user_id: string }
+  return decryptKep(kepId, userId)
 }
 
 /**

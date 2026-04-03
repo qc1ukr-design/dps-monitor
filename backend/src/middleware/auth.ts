@@ -1,5 +1,23 @@
-import { timingSafeEqual } from 'crypto'
+import { timingSafeEqual, createHmac } from 'crypto'
 import type { Request, Response, NextFunction } from 'express'
+
+/**
+ * Constant-time string comparison using HMAC-SHA256.
+ *
+ * P5.3: The naive pattern `a.length !== b.length || !timingSafeEqual(...)` leaks the
+ * expected secret's length via timing — requests with the wrong-length header return
+ * slightly faster (early exit before the comparison). HMAC digests are always 32 bytes,
+ * so timingSafeEqual always runs in constant time regardless of input length.
+ *
+ * A zero key is used here intentionally — HMAC security properties hold for any fixed
+ * key; we need timing-safe equality, not a MAC for authentication purposes.
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  const key   = Buffer.alloc(32, 0)
+  const hmacA = createHmac('sha256', key).update(a).digest()
+  const hmacB = createHmac('sha256', key).update(b).digest()
+  return timingSafeEqual(hmacA, hmacB)
+}
 
 /**
  * Validates the X-Backend-Secret header against BACKEND_API_SECRET env var.
@@ -15,12 +33,7 @@ export function requireApiSecret(req: Request, res: Response, next: NextFunction
   }
 
   const provided = req.headers['x-backend-secret']
-  if (
-    !provided ||
-    typeof provided !== 'string' ||
-    provided.length !== secret.length ||
-    !timingSafeEqual(Buffer.from(provided), Buffer.from(secret))
-  ) {
+  if (!provided || typeof provided !== 'string' || !constantTimeEqual(provided, secret)) {
     res.status(401).json({ error: 'Unauthorized' })
     return
   }
@@ -42,12 +55,8 @@ export function requireCronSecret(req: Request, res: Response, next: NextFunctio
   }
 
   const authHeader = req.headers['authorization']
-  const provided = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined
-  if (
-    !provided ||
-    provided.length !== secret.length ||
-    !timingSafeEqual(Buffer.from(provided), Buffer.from(secret))
-  ) {
+  const provided   = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined
+  if (!provided || !constantTimeEqual(provided, secret)) {
     res.status(401).json({ error: 'Unauthorized' })
     return
   }

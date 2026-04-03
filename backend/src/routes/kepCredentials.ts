@@ -120,10 +120,23 @@ router.post('/upload', kmsUploadRateLimit, authMiddleware, async (req: Request, 
     return
   }
 
-  // Ownership assumption: the caller (web/app/api/clients/[id]/kep/route.ts) verifies that
-  // clientId belongs to userId via `.eq('user_id', user.id)` on the clients table before
-  // calling this endpoint. This backend route trusts that contract. There is no DB-level FK
-  // enforcing client_id ↔ user_id on kep_credentials; see decryptKepByClientId() for details.
+  // P2.1: Verify that clientId belongs to the authenticated user server-side.
+  // This backend check is the authoritative ownership gate — never trust the web layer alone.
+  // If BACKEND_API_SECRET were compromised, this prevents KEP substitution (attacker linking
+  // their KEP to a victim's client).
+  {
+    const supabase = getSupabaseClient()
+    const { data: clientRow, error: clientErr } = await supabase
+      .from('clients')
+      .select('id')
+      .eq('id', clientId)
+      .eq('user_id', userId)
+      .limit(1)
+    if (clientErr || !clientRow || clientRow.length === 0) {
+      res.status(403).json({ error: 'clientId does not belong to this user' })
+      return
+    }
+  }
 
   if (!/^\d{8,10}$/.test(edrpou)) {
     res.status(400).json({ error: 'edrpou має містити 8 цифр (ЄДРПОУ) або 10 цифр (РНОКПП)' })

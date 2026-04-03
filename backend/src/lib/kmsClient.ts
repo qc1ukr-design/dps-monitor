@@ -18,7 +18,12 @@ import {
 // be replaced with a credential-aware factory that invalidates the cache on rotation.
 let _client: KMSClient | null = null
 
-function getClient(): KMSClient {
+/**
+ * Returns the shared KMSClient singleton.
+ * Exported so kms.ts can reuse the same instance instead of creating its own.
+ * All callers in this process share one authenticated connection to AWS KMS.
+ */
+export function getClient(): KMSClient {
   if (_client) return _client
 
   const region = process.env.AWS_REGION

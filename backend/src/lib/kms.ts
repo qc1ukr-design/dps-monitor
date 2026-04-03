@@ -1,24 +1,16 @@
 import {
-  KMSClient,
   GenerateDataKeyCommand,
   DecryptCommand,
 } from '@aws-sdk/client-kms'
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto'
+import { getClient } from './kmsClient.js'
 import type { KmsEnvelope } from '../types/index.js'
 
+// P3.2: Removed the local _kmsClient singleton and getKmsClient() factory.
+// kms.ts now uses the shared KMSClient instance exported from kmsClient.ts,
+// so the entire process has exactly one KMS connection with one credential state.
+
 const ALGORITHM = 'aes-256-gcm'
-
-let _kmsClient: KMSClient | null = null
-
-function getKmsClient(): KMSClient {
-  if (_kmsClient) return _kmsClient
-
-  const region = process.env.AWS_REGION
-  if (!region) throw new Error('AWS_REGION must be set')
-
-  _kmsClient = new KMSClient({ region })
-  return _kmsClient
-}
 
 function getKmsKeyId(): string {
   const keyId = process.env.AWS_KMS_KEY_ID
@@ -35,7 +27,7 @@ function getKmsKeyId(): string {
  * Returns a KmsEnvelope that can be stored in DB or passed between services.
  */
 export async function kmsEncrypt(plaintext: string): Promise<KmsEnvelope> {
-  const kms = getKmsClient()
+  const kms = getClient()
   const kmsKeyId = getKmsKeyId()
 
   const { Plaintext, CiphertextBlob } = await kms.send(
@@ -74,7 +66,7 @@ export async function kmsEncrypt(plaintext: string): Promise<KmsEnvelope> {
  *   3. Discard the plaintext data key
  */
 export async function kmsDecrypt(envelope: KmsEnvelope): Promise<string> {
-  const kms = getKmsClient()
+  const kms = getClient()
 
   const { Plaintext } = await kms.send(
     new DecryptCommand({

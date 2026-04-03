@@ -49,8 +49,9 @@ const FAKE_ENCRYPTED_DEK = Buffer.from('fake-kms-wrapped-dek-bytes')
 // Тестові дані
 const FAKE_KEP_BUFFER   = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33])
 const FAKE_PASSWORD      = 'SUPER_SECRET_PASSWORD_12345'
-const FAKE_USER_ID       = 'user-test-00000000'
-const FAKE_KEP_ID        = 'kep-test-00000000'
+// P5.1: Use valid UUID v4 format so test data matches what production routes accept.
+const FAKE_USER_ID       = '00000000-0000-4000-8000-000000000001'
+const FAKE_KEP_ID        = '00000000-0000-4000-8000-000000000002'
 const FAKE_KMS_KEY_ID    = 'arn:aws:kms:eu-central-1:123456789012:key/test-key-id'
 
 // ---------------------------------------------------------------------------

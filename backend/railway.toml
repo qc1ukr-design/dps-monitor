@@ -1,3 +1,10 @@
+# P1 process hardening (AWS SDK DEK memory window):
+# - Never enable --inspect or --inspect-brk in production (no remote debugger access to heap)
+# - Core dumps are disabled by default on Railway — do not override RLIMIT_CORE
+# - No shared-host tenancy on Railway Pro — cross-process memory reads are not possible
+# These controls eliminate the practical exploitability of the inherent Node.js limitation
+# where the AWS SDK holds a DEK copy in its Uint8Array until GC collection.
+
 [build]
 builder = "NIXPACKS"
 buildCommand = "npm install && npm run build"

@@ -45,6 +45,9 @@ router.get('/:clientId', async (req: Request, res: Response): Promise<void> => {
   }
 
   try {
+    // P5.2: jkurwa stores KEP files as JSON v2 strings — valid UTF-8 — so toString('utf8')
+    // is safe here. If a binary (.p12/.pfx) KEP is ever used, switch to 'base64' and update
+    // the corresponding Buffer.from() call on the upload path in kepCredentials.ts.
     res.json({
       kepData:  decrypted.kepFileBuffer.toString('utf8'),
       password: decrypted.kepPassword,

@@ -155,7 +155,7 @@ function sanitizeErrorMessage(msg: string): string {
 async function writeAuditLog(entry: {
   kepId:        string | null
   userId:       string | null
-  action:       'UPLOAD' | 'USE_FOR_DPS' | 'DELETE' | 'VIEW_LIST'
+  action:       'UPLOAD' | 'USE_FOR_DPS' | 'DELETE' | 'VIEW_LIST' | 'KEP_TEST'
   success:      boolean
   errorMessage: string | null
 }): Promise<void> {
@@ -296,7 +296,11 @@ export async function encryptKep(params: {
  * The DEK is fetched from KMS and zeroed immediately after decryption.
  * The caller MUST invoke cleanup() after signing to zero decrypted material.
  */
-export async function decryptKep(kepId: string, userId: string): Promise<DecryptedKep> {
+export async function decryptKep(
+  kepId:  string,
+  userId: string,
+  action: 'USE_FOR_DPS' | 'KEP_TEST' = 'USE_FOR_DPS',
+): Promise<DecryptedKep> {
   let dek: Buffer | null = null
 
   try {
@@ -349,7 +353,7 @@ export async function decryptKep(kepId: string, userId: string): Promise<Decrypt
       .eq('user_id', userId)
       .then(() => {/* intentionally ignored */})
 
-    await writeAuditLog({ kepId, userId, action: 'USE_FOR_DPS', success: true, errorMessage: null })
+    await writeAuditLog({ kepId, userId, action, success: true, errorMessage: null })
 
     // 6. Return decrypted material + cleanup function
     // M-1: cleaned flag prevents double-zeroing from masking accidental re-use
@@ -373,7 +377,7 @@ export async function decryptKep(kepId: string, userId: string): Promise<Decrypt
     await writeAuditLog({
       kepId,
       userId,
-      action:       'USE_FOR_DPS',
+      action,
       success:      false,
       errorMessage: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
     })

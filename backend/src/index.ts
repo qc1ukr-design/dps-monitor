@@ -39,18 +39,22 @@ app.use(
       }
     },
     methods: ['GET', 'POST', 'DELETE'],
-    // X-User-Id kept for legacy compatibility; Authorization carries Supabase JWT
-    allowedHeaders: ['Content-Type', 'X-Backend-Secret', 'Authorization', 'X-User-Id'],
+    // P3.3: X-User-Id removed — no active route reads this header, and its presence
+    // in allowedHeaders could mislead future developers into trusting a caller-supplied userId.
+    allowedHeaders: ['Content-Type', 'X-Backend-Secret', 'Authorization'],
   })
 )
 
 // ---------------------------------------------------------------------------
 // Rate limiting — global baseline (tightened per-route where needed)
 // ---------------------------------------------------------------------------
+// P4.1: Lowered from 100 to 30 req/min/IP. This backend is exclusively server-to-server
+// (Vercel → Railway), so 30/min is well above legitimate traffic while limiting cost
+// amplification if BACKEND_API_SECRET is ever compromised.
 app.use(
   rateLimit({
     windowMs: 60 * 1000, // 1 minute
-    max: 100,
+    max: 30,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests, please try again later.' },

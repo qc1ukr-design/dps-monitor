@@ -226,14 +226,11 @@ router.post('/:id/test', sensitiveOpRateLimit, authMiddleware, async (req: Reque
     return
   }
 
-  // Audit note (N-6): decryptKep() internally writes a USE_FOR_DPS audit log entry.
-  // This means test-decrypt operations appear as USE_FOR_DPS in kep_access_log, which
-  // slightly inflates DPS usage statistics. A dedicated KEP_TEST action would require a
-  // DB migration for kep_access_log.action. Acceptable trade-off until usage analytics
-  // become a product requirement.
+  // P3.4: pass 'KEP_TEST' so kep_access_log distinguishes test-decrypt from real DPS syncs.
+  // Requires migration 010 to have been applied (adds KEP_TEST to the action check constraint).
   let decrypted
   try {
-    decrypted = await decryptKep(id, userId)
+    decrypted = await decryptKep(id, userId, 'KEP_TEST')
   } catch (err) {
     // H-3: never expose err.message to the client — it may contain internal details
     console.error('[kep] test decrypt error:', err instanceof Error ? err.message : String(err))

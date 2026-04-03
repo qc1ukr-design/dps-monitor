@@ -1,8 +1,13 @@
+import { fileURLToPath } from 'url'
+import { dirname, resolve } from 'path'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Next.js 14: serverComponentsExternalPackages (moved to top-level in Next.js 15)
-  experimental: {
-    serverComponentsExternalPackages: ['jkurwa', 'gost89', 'adm-zip', 'node-forge'],
+  serverExternalPackages: ['jkurwa', 'gost89', 'adm-zip', 'node-forge'],
+  turbopack: {
+    root: resolve(__dirname, '..'),
   },
 }
 

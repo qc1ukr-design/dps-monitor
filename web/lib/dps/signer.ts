@@ -14,13 +14,11 @@
  */
 
 // jkurwa / gost89 are CommonJS, loaded at runtime (serverExternalPackages in next.config)
-/* eslint-disable @typescript-eslint/no-require-imports */
 const jk = require('jkurwa') as typeof import('jkurwa')
 const gost89 = require('gost89') as { compat: { algos: () => unknown } }
 const AdmZip = require('adm-zip') as new (buf: Buffer) => {
   getEntries(): Array<{ entryName: string; isDirectory: boolean; header: { size: number }; getData(): Buffer }>
 }
-/* eslint-enable @typescript-eslint/no-require-imports */
 
 // Monkey-patch: replace GOST-34311 cert hash in signingCertificateV2 with SHA-256.
 // DPS OAuth server (Java/Spring) lacks GOST-34311 JCA provider → NPE → 500.
@@ -28,15 +26,13 @@ const AdmZip = require('adm-zip') as new (buf: Buffer) => {
 // Must run at module load time before any signing occurs.
 ;(function patchSigningCertificateV2() {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const certidSpec = require('jkurwa/lib/spec/rfc5035-certid') as {
       SigningCertificateV2: { wrap: (cert: unknown, hash: Buffer) => Buffer; encode: (val: unknown, enc: string) => Buffer }
     }
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const rfc3280 = require('jkurwa/lib/spec/rfc3280') as {
       Certificate: { encode: (cert: unknown, enc: string) => Buffer }
     }
-    const { createHash } = require('crypto') as typeof import('crypto') // eslint-disable-line @typescript-eslint/no-require-imports
+    const { createHash } = require('crypto') as typeof import('crypto')
 
     certidSpec.SigningCertificateV2.wrap = function(cert: unknown): Buffer {
       const certDer = rfc3280.Certificate.encode(cert, 'der')
@@ -145,7 +141,6 @@ function extractFromZip(zipBuf: Buffer): {
  */
 function extractCertsFromPfxFallback(pfxBuffer: Buffer, password: string): Buffer[] {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const forge = require('node-forge') as {
       util: { createBuffer: (s: string) => unknown }
       asn1: {
@@ -266,12 +261,10 @@ const CMP_SERVERS = [
  *   request the seal key's cert from the CA.
  */
 async function fetchCertFromCA(box: InstanceType<typeof jk.Box>, keyStartIndex = 0): Promise<Buffer[]> {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const Message = require('jkurwa/lib/models/Message') as new (data: Buffer | object) => {
     as_asn1: () => Buffer
     info: unknown
   }
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const JkCertificate = require('jkurwa/lib/models/Certificate') as new (data: unknown) => {
     as_asn1: () => Buffer
   }
@@ -304,7 +297,6 @@ async function fetchCertFromCA(box: InstanceType<typeof jk.Box>, keyStartIndex =
       const response = await fetch(server, {
         method: 'POST',
         body: new Uint8Array(payload),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         signal: (AbortSignal as any).timeout(8000),
       })
 

@@ -11,7 +11,6 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState('')
   const [done, setDone] = useState(false)
   const router = useRouter()
-  const supabase = createClient()
 
   useEffect(() => {
     // Supabase redirects with #access_token in the URL
@@ -26,6 +25,7 @@ export default function ResetPasswordPage() {
     }
     setLoading(true)
     setError('')
+    const supabase = createClient()
 
     const { error } = await supabase.auth.updateUser({ password })
 

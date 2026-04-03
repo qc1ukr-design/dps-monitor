@@ -243,7 +243,7 @@ export async function loginWithKepAsYuoEdrpouFormat(
 export async function loginWithKep(
   kepDecrypted: string,
   password: string,
-  _taxIdHint: string  // eslint-disable-line @typescript-eslint/no-unused-vars
+  _taxIdHint: string
 ): Promise<DpsSession> {
   // Always use the cert's own taxId (РНОКПП) — OAuth rejects any mismatch
   const taxId = await getCertTaxId(kepDecrypted, password)

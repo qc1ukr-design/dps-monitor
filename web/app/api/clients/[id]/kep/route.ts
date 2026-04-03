@@ -58,6 +58,23 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: 'password is required' }, { status: 400 })
   }
 
+  // P2-01: Validate file count and size to prevent memory abuse
+  const MAX_FILES = 5
+  const MAX_FILE_SIZE_B64 = 150 * 1024 // ~112KB decoded — enough for any KEP file
+  if (files) {
+    if (files.length > MAX_FILES) {
+      return NextResponse.json({ error: `Максимум ${MAX_FILES} файлів` }, { status: 400 })
+    }
+    for (const f of files) {
+      if (typeof f.name !== 'string' || typeof f.base64 !== 'string') {
+        return NextResponse.json({ error: 'Невалідний формат файлу' }, { status: 400 })
+      }
+      if (f.base64.length > MAX_FILE_SIZE_B64) {
+        return NextResponse.json({ error: `Файл "${f.name}" занадто великий (максимум ~112 КБ)` }, { status: 400 })
+      }
+    }
+  }
+
   let kepInfo
   let kepStorageValue: string
   let fileName = ''
@@ -95,7 +112,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       } catch (e) {
         return NextResponse.json({
           error: 'Невірний файл KEP або неправильний пароль',
-          detail: String(e),
+          detail: e instanceof Error ? e.message.slice(0, 200) : 'KEP parse error',
         }, { status: 400 })
       }
       kepStorageValue = JSON.stringify({ v: 2, files })
@@ -108,7 +125,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       } catch (e) {
         return NextResponse.json({
           error: 'Невірний файл KEP або неправильний пароль',
-          detail: String(e),
+          detail: e instanceof Error ? e.message.slice(0, 200) : 'KEP parse error',
         }, { status: 400 })
       }
       kepStorageValue = extractedCertBase64
@@ -118,6 +135,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
   } else if (pfxBase64) {
     // ── Legacy single-file mode (API compat) ─────────────────────────────────
+    if (pfxBase64.length > MAX_FILE_SIZE_B64) {
+      return NextResponse.json({ error: 'Файл занадто великий (максимум ~112 КБ)' }, { status: 400 })
+    }
     let pfxBuffer: Buffer
     try {
       pfxBuffer = Buffer.from(pfxBase64, 'base64')
@@ -135,7 +155,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     } catch (e) {
       return NextResponse.json({
         error: 'Невірний файл KEP або неправильний пароль',
-        detail: String(e),
+        detail: e instanceof Error ? e.message.slice(0, 200) : 'KEP parse error',
       }, { status: 400 })
     }
 

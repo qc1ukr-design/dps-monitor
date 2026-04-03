@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
+import KepUploadForm, { type KepInfo } from './KepUploadForm'
 
 interface KepStatus {
   configured: boolean
@@ -20,16 +21,9 @@ interface TokenStatus {
 export default function ClientSettingsPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
-  const fileRef = useRef<HTMLInputElement>(null)
-
-  const [kepPassword, setKepPassword] = useState('')
-  const [showKepPassword, setShowKepPassword] = useState(false)
   const [kepStatus, setKepStatus] = useState<KepStatus | null>(null)
-  const [kepLoading, setKepLoading] = useState(false)
-  const [kepError, setKepError] = useState('')
-  const [kepUploadedInfo, setKepUploadedInfo] = useState<KepStatus | null>(null)
+  const [kepUploadedInfo, setKepUploadedInfo] = useState<KepInfo | null>(null)
   const [showReplaceForm, setShowReplaceForm] = useState(false)
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
 
   const [tokenValue, setTokenValue] = useState('')
   const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null)
@@ -76,62 +70,25 @@ export default function ClientSettingsPage() {
 
   async function handleDeleteToken() {
     if (!confirm('Видалити UUID-токен?')) return
-    await fetch(`/api/clients/${id}/token`, { method: 'DELETE' })
-    setTokenStatus({ configured: false })
-    setTokenSaved(false)
+    const res = await fetch(`/api/clients/${id}/token`, { method: 'DELETE' })
+    if (res.ok) {
+      setTokenStatus({ configured: false })
+      setTokenSaved(false)
+    }
   }
 
-  async function handleUploadKep(e: React.FormEvent) {
-    e.preventDefault()
-    setKepError('')
-
-    const files = fileRef.current?.files
-    if (!files || files.length === 0) { setKepError('Оберіть файл(и) KEP'); return }
-    if (!kepPassword) { setKepError('Введіть пароль KEP'); return }
-
-    setKepLoading(true)
-
-    const filePayload = await Promise.all(
-      Array.from(files).map(file =>
-        new Promise<{ name: string; base64: string }>((resolve, reject) => {
-          const reader = new FileReader()
-          reader.onload = () => resolve({ name: file.name, base64: (reader.result as string).split(',')[1] })
-          reader.onerror = reject
-          reader.readAsDataURL(file)
-        })
-      )
-    )
-
-    const res = await fetch(`/api/clients/${id}/kep`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ files: filePayload, password: kepPassword }),
-    })
-
-    setKepLoading(false)
-    const json = await res.json()
-
-    if (!res.ok) {
-      const detail = json.detail ?? ''
-      if (detail.includes('NO_CERT')) {
-        setKepError(
-          'Сертифікат не знайдено у файлі та на серверах ЦСК.\n\n' +
-          'Спробуйте завантажити .pfx разом із файлом сертифіката (.cer) одночасно.'
-        )
-      } else {
-        setKepError(json.error + (detail ? '\n' + detail : ''))
-      }
-      return
+  function handleKepSuccess(kepInfo: KepInfo) {
+    const newStatus: KepStatus = {
+      configured: true,
+      caName: kepInfo.caName ?? undefined,
+      ownerName: kepInfo.ownerName ?? undefined,
+      orgName: kepInfo.orgName ?? undefined,
+      taxId: kepInfo.taxId ?? undefined,
+      validTo: kepInfo.validTo ?? undefined,
     }
-
-    const info = json.kepInfo as Omit<KepStatus, 'configured'>
-    const newStatus: KepStatus = { ...info, configured: true }
     setKepStatus(newStatus)
-    setKepUploadedInfo(newStatus)
+    setKepUploadedInfo(kepInfo)
     setShowReplaceForm(false)
-    setKepPassword('')
-    setSelectedFiles([])
-    if (fileRef.current) fileRef.current.value = ''
   }
 
   async function handleArchiveToggle() {
@@ -161,7 +118,7 @@ export default function ClientSettingsPage() {
     }
   }
 
-  const showUploadForm = !kepStatus?.configured || showReplaceForm
+  const showUploadForm = kepStatus !== null && (!kepStatus.configured || showReplaceForm)
 
   return (
     <div className="max-w-lg mx-auto py-10 px-4 space-y-6">
@@ -251,97 +208,12 @@ export default function ClientSettingsPage() {
 
         {/* Upload form */}
         {showUploadForm && (
-          <form onSubmit={handleUploadKep} className="space-y-4">
-            {showReplaceForm && (
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-gray-700">Завантажити новий ключ</span>
-                <button
-                  type="button"
-                  onClick={() => { setShowReplaceForm(false); setKepError('') }}
-                  className="text-xs text-gray-400 hover:text-gray-600"
-                >
-                  ✕ Скасувати
-                </button>
-              </div>
-            )}
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Файл(и) КЕП <span className="text-red-500">*</span>
-              </label>
-              <input
-                ref={fileRef}
-                type="file"
-                multiple
-                accept=".pfx,.p12,.jks,.dat,.cer,.crt,.zs2,.zs3,.zs1,.sk,.zip"
-                onChange={(e) => setSelectedFiles(Array.from(e.target.files ?? []))}
-                className="w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium hover:file:bg-blue-100 transition"
-              />
-              <p className="text-xs text-gray-400 mt-1">
-                Підтримується: .pfx, .p12, .dat, .ZS2, .ZS3, ZIP-архів.
-                Якщо ключ та сертифікат у різних файлах — оберіть їх одночасно.
-              </p>
-              <p className="text-xs text-amber-600 mt-1">
-                <strong>Для ЮО:</strong> оберіть одночасно <em>ключ директора</em> і <em>ключ-печатку</em> підприємства.
-                Якщо сертифікат печатки зберігається в окремому файлі (.cer) — додайте його також.
-              </p>
-              {selectedFiles.length > 1 && (
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {selectedFiles.map((f, i) => (
-                    <span key={i} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
-                      {f.name}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Пароль <span className="text-red-500">*</span>
-              </label>
-              <div className="relative">
-                <input
-                  type={showKepPassword ? 'text' : 'password'}
-                  value={kepPassword}
-                  onChange={(e) => setKepPassword(e.target.value)}
-                  placeholder="Пароль від КЕП"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowKepPassword(v => !v)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition"
-                  tabIndex={-1}
-                >
-                  {showKepPassword ? (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-                    </svg>
-                  ) : (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                    </svg>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {kepError && (
-              <div className="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-lg whitespace-pre-line">{kepError}</div>
-            )}
-
-            <button
-              type="submit"
-              disabled={kepLoading}
-              className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-60 transition"
-            >
-              {kepLoading ? 'Завантаження і перевірка...' : kepStatus?.configured ? 'Замінити КЕП' : 'Зберегти КЕП'}
-            </button>
-          </form>
+          <KepUploadForm
+            clientId={id}
+            replacing={showReplaceForm}
+            onSuccess={handleKepSuccess}
+            onCancel={showReplaceForm ? () => setShowReplaceForm(false) : undefined}
+          />
         )}
       </div>
 

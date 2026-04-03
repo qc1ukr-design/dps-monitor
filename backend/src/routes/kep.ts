@@ -2,9 +2,6 @@ import { Router } from 'express'
 import type { Request, Response } from 'express'
 import { decryptKepByClientIdInternal } from '../services/kepEncryptionService.js'
 
-// NOTE: POST /kep/upload was removed (2026-04-02, Крок D cleanup).
-// New uploads go to POST /kep-credentials/upload (JWT-authenticated).
-
 const router = Router()
 
 // UUID v4 format guard

@@ -217,7 +217,7 @@ DPS-Monitor/
 
 ### Для SQL міграцій:
 - Файл: `supabase/migrations/00N_description.sql`
-- Наступна: `009_...sql`
+- Наступна: `011_...sql`
 - Завжди включати: RLS policies, індекси, тригери updated_at якщо є
 - Виконувати через Supabase SQL Editor (не через CLI якщо не налаштовано)
 
@@ -282,20 +282,19 @@ DPS-Monitor/
 
 ---
 
-## 12. Поточні відкриті задачі (станом на 2026-04-02)
+## 12. Поточні відкриті задачі (станом на 2026-04-03)
 
-Міграція `kep_credentials` — виконувати послідовно (кроки A→E):
+Міграція `kep_credentials` — **100% завершена** (кроки A→E виконано):
 
-- [x] **Міграції 005 + 006** — `kep_credentials` + `kep_access_log` + `client_id` FK ✅
-- [x] **`/kep-credentials` route** — `backend/src/routes/kepCredentials.ts` задеплоєно ✅
-- [x] **Dual-read fallback** — `GET /kep/:clientId` спочатку читає `kep_credentials`, fallback на `api_tokens` ✅
-- [x] **`backendUploadKepCredential()`** — додано у `web/lib/backend.ts` ✅
-- [x] **Крок B — Backfill виконано:** 6/6 перенесено в `kep_credentials` ✅ (2026-04-02)
-- [x] **Крок C — Верифікація:** 6/6 `kep_credentials` активні, 7 `USE_FOR_DPS` записів у `kep_access_log`, нуль fallback-звернень ✅ (2026-04-02)
-- [x] **Крок D — Upload перемкнуто:** `kep/route.ts` → `backendUploadKepCredential()` (+ Supabase JWT, kepInfo metadata) ✅ (2026-04-02)
-- [x] **Крок E — Міграція 008 виконана:** `client_id SET NOT NULL`, cert-metadata колонки (ca_name, owner_name, org_name, tax_id, valid_to), fallback видалено з `GET /kep/:clientId` ✅ (2026-04-02)
+- [x] **Міграції 005–008** — `kep_credentials`, `kep_access_log`, `client_id NOT NULL`, cert-metadata колонки ✅
+- [x] **`/kep-credentials` route + `/api/kep/*` route** — задеплоєно ✅
+- [x] **Backfill:** 6/6 перенесено в `kep_credentials` ✅
+- [x] **Верифікація:** cron 6/6 OK, 7 `USE_FOR_DPS` у `kep_access_log` ✅
+- [x] **Upload перемкнуто:** `backendUploadKepCredential()` з JWT + kepInfo ✅
+- [x] **Fallback на `api_tokens` видалено** ✅
+- [x] **Security audit P1–P5** — нуль відкритих вразливостей ✅ (2026-04-03)
+- [x] **Cleanup** — мертвий comment видалено з `kep.ts` ✅ (2026-04-03)
 - [ ] **npm audit** — 4 вразливості потребують Next.js 14→16 (breaking change, відкладено)
-- [ ] **Cleanup** — `POST /kep/upload` в `kep.ts` є мертвим кодом після Кроку D; можна видалити окремим PR
 
 ---
 

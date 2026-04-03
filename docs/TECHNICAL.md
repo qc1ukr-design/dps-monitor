@@ -1,6 +1,6 @@
 # DPS-Monitor — Технічна документація
 
-> Останнє оновлення: 2026-04-03 (сесія 8)
+> Останнє оновлення: 2026-04-03 (сесія 9)
 
 ---
 
@@ -8,7 +8,7 @@
 
 **DPS-Monitor** — веб-застосунок для моніторингу стану розрахунків, звітності та документообігу клієнтів у системі ДПС України (Електронний кабінет платника).
 
-- **Фронтенд / SSR:** Next.js 14 (App Router), TypeScript, Tailwind CSS
+- **Фронтенд / SSR:** Next.js 16 (App Router), TypeScript, Tailwind CSS
 - **База даних / Auth:** Supabase (PostgreSQL + Auth)
 - **Деплой web:** Vercel (`dps-monitor.vercel.app`) — підключений до репо `qc1ukr-design/dps-monitor`
 - **Backend:** Express.js (Node.js, TypeScript) — деплой на Railway (`dps-monitor-production.up.railway.app`); watchPatterns `["backend/**"]` → авто-деплой при push
@@ -670,10 +670,11 @@ Telegram-тільки (email не використовується — RESEND_AP
 | 2026-04-02 | **Міграція kep_credentials: кроки C→E завершено** | **Крок C** (верифікація): cron sync-all 6/6 OK, `kep_access_log` — 7 записів `USE_FOR_DPS`, нуль fallback. **Крок D** (upload перемкнуто): `kep/route.ts` тепер викликає `backendUploadKepCredential()` з JWT + kepInfo metadata. **Крок E** (міграція 008): `client_id SET NOT NULL`, cert-metadata колонки (ca_name, owner_name, org_name, tax_id, valid_to), fallback на `api_tokens` видалено з `GET /kep/:clientId`. |
 | 2026-04-03 | **Security audit P1–P5 (сесія 8): всі вразливості закрито** | 22 Jest-тести у `kepSecurity.test.ts`. **P1** — `railway.toml` hardening comment (Node.js heap memory window). **P2.1** — ownership check `clients.user_id` у `POST /kep-credentials/upload` (захист від KEP substitution attack). **P3.1** — `aes.ts`: `key.fill(0)` у `finally` після scrypt. **P3.2** — KMS singleton: `getClient()` з `kmsClient.ts` — видалено дублікат у `kms.ts`. **P3.3** — CORS: видалено мертвий заголовок `X-User-Id`. **P3.4** — `decryptKep` отримав optional `action` param; `POST /api/kep/:id/test` пише `KEP_TEST` в audit log (не `USE_FOR_DPS`); міграція 010 виконана. **P4.1** — rate limit 100→30 req/min/IP. **P5.1** — test UUID v4 у `kepSecurity.test.ts`. **P5.2** — utf8/jkurwa коментар у `GET /kep/:clientId`. **P5.3** — HMAC-SHA256 constant-time порівняння в `auth.ts` (усуває length-timing leak). Коміт `8dcdd6c`, задеплоєно на Railway + Vercel. |
 | 2026-04-03 | **Cleanup: мертвий код видалено, документацію оновлено** | Прибрано comment-некролог `NOTE: POST /kep/upload was removed` з `kep.ts`. TECHNICAL.md оновлено до поточного стану (сесія 8). CLAUDE.md: міграція kep_credentials позначена як 100% завершена. |
+| 2026-04-03 | **Next.js 14 → 16 + ESLint 8 → 9 (сесія 9)** | Оновлено `next` до `16.2.2`, `eslint` до `9.x`, `eslint-config-next` до `16.2.2`. Видалено `.eslintrc.json`, створено `eslint.config.mjs` з нативним flat config (`eslint-config-next@16` більше не потребує FlatCompat). `next.config.mjs`: `serverComponentsExternalPackages` (experimental) → `serverExternalPackages` (top-level); додано `turbopack.root` для коректного визначення workspace у монорепо. Видалено застарілі `eslint-disable` коментарі з `signer.ts` і `dps-auth.ts`. **Критичний fix:** Next.js 16 генерує статичну HTML-оболонку для `'use client'`-сторінок під час build — `createClient()` на рівні тіла компонента кидав помилку (відсутні Supabase env vars у Preview). Виправлено: `createClient()` перенесено всередину обробників подій (`handleLogin`, `handleForgotPassword`, `handleRegister`, `handleSubmit`) у 4 auth-сторінках. npm вразливості закрито (були пов'язані саме з Next.js 14). Гілку `upgrade/nextjs-16` змержено в `main`, задеплоєно на `dps-monitor.vercel.app`. Backup: `git tag stable-2026-04-03` + zip-архів. |
 
 ---
 
-## 17. Поточний стан системи (станом на 2026-04-03, сесія 8)
+## 17. Поточний стан системи (станом на 2026-04-03, сесія 9)
 
 ### ✅ Повністю завершено і стабільно
 
@@ -690,6 +691,7 @@ Telegram-тільки (email не використовується — RESEND_AP
 | **Excel-експорт** | 8 колонок у зведеному звіті, включаючи "КЕП дійсний до" з кольором. |
 | **Безпека секретів** | Всі секрети ротовано після виявлення витоку. `.gitignore` захищає від повторення. Supabase мігровано на новий формат ключів (`sb_publishable_` / `sb_secret_`). |
 | **Security audit КЕП** | Два повних аудити (сесії 7 та 8). Всього 22 Jest-тести. **Нуль відкритих вразливостей.** Остання серія P1–P5 закрита в коміті `8dcdd6c` (2026-04-03). Деталі — §16 хронологія 2026-04-02 та 2026-04-03. |
+| **Next.js 16 + ESLint 9** | `next@16.2.2`, ESLint flat config. `npm audit` — 0 вразливостей. `createClient()` ініціалізується тільки в обробниках подій (SSR-safe). Задеплоєно в `main`, production ✅ (сесія 9). |
 
 ### 🌐 Продакшн URL
 
@@ -724,10 +726,15 @@ Telegram-тільки (email не використовується — RESEND_AP
 
 ---
 
-### 💡 Відкладені задачі (не блокують поточний функціонал)
+### 💡 Наступні кроки (в порядку пріоритетності)
 
-- **npm вразливості** — 4 вразливості потребують Next.js 14→16 (breaking change); відкладено.
-- **Нові функції** — за потребою замовника
+1. **`middleware.ts` → перейменувати на `proxy.ts`** — Next.js 16 вважає `middleware.ts` застарілою назвою (deprecation warning у build log). Не блокує роботу, але варто виправити в наступній сесії. Файл: `web/middleware.ts`.
+
+2. **Підключення KEP UI на фронтенді** — Public KEP REST API (`/api/kep/*`) задеплоєно і протестовано, але UI-форма для завантаження/заміни КЕП через браузер поки відсутня. Поточний флоу — ручне завантаження через Settings. Можна побудувати повноцінний UI в `dashboard/client/[id]/settings/`.
+
+3. **Мобільний застосунок (`mobile/`)** — директорія є, React Native / Expo структура наявна. Ще не розпочинали активну розробку. Може використовувати Public KEP REST API для управління КЕП з телефону.
+
+4. **Нові функції** — за потребою замовника (наприклад: нові типи алертів, розширений Excel-звіт, інтеграції).
 
 ---
 

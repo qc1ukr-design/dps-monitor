@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 2. Стек технологій
 
 ```
-Web (Vercel):    Next.js 14 App Router · TypeScript · Tailwind CSS · Supabase Auth
+Web (Vercel):    Next.js 16 App Router · TypeScript · Tailwind CSS · Supabase Auth
 Backend (Railway): Express.js · Node.js · TypeScript
 Database:        Supabase (PostgreSQL) — проект zvvvgjmyecabhugvkyjz
 Crypto (КЕП):   jkurwa (ДСТУ 4145, CAdES-BES) — підписання запитів до ДПС
@@ -282,9 +282,9 @@ DPS-Monitor/
 
 ---
 
-## 12. Поточні відкриті задачі (станом на 2026-04-03)
+## 12. Поточні відкриті задачі (станом на 2026-04-03, сесія 9)
 
-Міграція `kep_credentials` — **100% завершена** (кроки A→E виконано):
+Міграція `kep_credentials` та технічний борг — **повністю закрито**:
 
 - [x] **Міграції 005–008** — `kep_credentials`, `kep_access_log`, `client_id NOT NULL`, cert-metadata колонки ✅
 - [x] **`/kep-credentials` route + `/api/kep/*` route** — задеплоєно ✅
@@ -294,7 +294,15 @@ DPS-Monitor/
 - [x] **Fallback на `api_tokens` видалено** ✅
 - [x] **Security audit P1–P5** — нуль відкритих вразливостей ✅ (2026-04-03)
 - [x] **Cleanup** — мертвий comment видалено з `kep.ts` ✅ (2026-04-03)
-- [ ] **npm audit** — 4 вразливості потребують Next.js 14→16 (breaking change, відкладено)
+- [x] **Next.js 14 → 16, ESLint 8 → 9** — задеплоєно в production ✅ (2026-04-03)
+- [x] **npm audit** — 0 вразливостей після Next.js 16 ✅ (2026-04-03)
+
+**Наступна міграція — 011** (при потребі).
+
+**Наступні кроки (не блокують функціонал):**
+1. `web/middleware.ts` → перейменувати на `proxy.ts` (Next.js 16 deprecation)
+2. KEP UI на фронтенді (upload/заміна КЕП через браузер)
+3. Мобільний застосунок (`mobile/`) — використовує `/api/kep/*`
 
 ---
 

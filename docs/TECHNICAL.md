@@ -896,3 +896,331 @@ Blob-поля (`encrypted_kep_blob`, `encrypted_dek` тощо) **ніколи** 
 | L-1 | `aesGcmDecryptBuffer` blob parser — edge case з `:` у base64 | Прийнятно: недосяжно без компрометації БД; `parts.length !== 3` вже перевіряється |
 | L-3 | KMS client singleton не підхоплює ротацію credentials без рестарту | Прийнятно: Railway перезапускає при деплої; задокументувати в runbook ротації ключів |
 | L-4 | Stack traces у Railway logs містять шляхи до файлів контейнера | Прийнятно: логи Railway не публічні; обмежити доступ до Railway проєкту |
+
+---
+
+## 20. Mobile Application (React Native / Expo)
+
+> Архітектура затверджена 2026-04-04. Реалізація — наступна велика фіча після верифікації cron.
+
+### 20.1 Загальний опис
+
+Мобільний застосунок для бухгалтерів, що ведуть клієнтів-ФОП та ЮО. Основна цінність — push-сповіщення про нові борги, документи від ДПС, закінчення КЕП. Дублює ключовий функціонал web-дашборду в зручному мобільному форматі.
+
+**Стек:** React Native 0.83.2 · Expo 55 · TypeScript · Supabase Auth (AsyncStorage) · React Navigation
+
+**Директорія:** `mobile/` (монорепо, поряд з `web/` і `backend/`)
+
+**Auth:** Supabase session (JWT) → той самий `access_token` підставляється у `Authorization: Bearer` до Vercel API
+
+---
+
+### 20.2 Структура навігації
+
+```
+RootNavigator (Stack)
+├── AuthStack                     — якщо session = null
+│   ├── LoginScreen
+│   └── ForgotPasswordScreen
+│
+└── AppTabNavigator (Tab)         — якщо session є
+    ├── 🏠 Дашборд (Stack)
+    │   └── DashboardScreen       — summary картки: борг, переплата, всього клієнтів
+    │
+    ├── 👥 Клієнти (Stack)
+    │   ├── ClientsListScreen
+    │   ├── ClientDetailScreen    — params: { clientId, clientName }
+    │   └── ClientDocumentsScreen — params: { clientId }
+    │
+    ├── 🔔 Алерти (Stack)         — badge з кількістю непрочитаних
+    │   └── AlertsScreen
+    │
+    └── 👤 Профіль (Stack)
+        └── ProfileScreen         — email, logout, Telegram chat ID
+```
+
+**Вибір React Navigation (не Expo Router):** менше рефакторингу існуючої структури, прямолінійні Stack + Tab параметри, зрілий і задокументований для MVP.
+
+---
+
+### 20.3 Файлова структура `mobile/`
+
+```
+mobile/
+├── App.tsx                        ← RootNavigator + Navigation провайдери
+├── index.ts
+├── app.json
+├── package.json
+│
+├── lib/
+│   ├── supabase.ts                ← існує: Supabase клієнт (AsyncStorage)
+│   ├── api.ts                     ← HTTP-клієнт до Vercel API (apiFetch + всі методи)
+│   └── constants.ts               ← BASE_URL, ALERT_ICONS, кольори
+│
+├── hooks/
+│   ├── useSession.ts              ← supabase.auth.onAuthStateChange → { session, loading }
+│   ├── useClients.ts              ← GET /api/clients + refresh
+│   ├── useClient.ts               ← GET /api/clients/[id]
+│   ├── useAlerts.ts               ← GET /api/alerts + unread count
+│   └── useMarkRead.ts             ← POST /api/alerts/mark-read
+│
+├── screens/
+│   ├── auth/
+│   │   ├── LoginScreen.tsx
+│   │   └── ForgotPasswordScreen.tsx
+│   ├── dashboard/
+│   │   └── DashboardScreen.tsx
+│   ├── clients/
+│   │   ├── ClientsListScreen.tsx
+│   │   ├── ClientDetailScreen.tsx
+│   │   └── ClientDocumentsScreen.tsx
+│   ├── alerts/
+│   │   └── AlertsScreen.tsx
+│   └── profile/
+│       └── ProfileScreen.tsx
+│
+├── components/
+│   ├── ui/
+│   │   ├── Button.tsx
+│   │   ├── Card.tsx
+│   │   ├── Badge.tsx
+│   │   ├── EmptyState.tsx
+│   │   └── LoadingScreen.tsx
+│   ├── clients/
+│   │   ├── ClientListItem.tsx
+│   │   ├── SummaryCards.tsx
+│   │   └── KepStatusBadge.tsx
+│   └── alerts/
+│       └── AlertListItem.tsx
+│
+└── navigation/
+    ├── RootNavigator.tsx
+    ├── AppTabNavigator.tsx
+    ├── ClientsStackNavigator.tsx
+    └── types.ts                   ← типи параметрів навігації (TypeScript)
+```
+
+---
+
+### 20.4 Auth Flow
+
+1. `App.tsx` рендерить `RootNavigator`
+2. `RootNavigator` викликає `useSession()` → підписується на `supabase.auth.onAuthStateChange`
+3. Поки `loading = true` → `LoadingScreen` (уникаємо flash не того екрану)
+4. `session = null` → рендерити `AuthStack`
+5. `session` є → рендерити `AppTabNavigator`
+6. Logout: `supabase.auth.signOut()` → `onAuthStateChange` стрільне `SIGNED_OUT` → автоперехід на `AuthStack` без ручного `navigate()`
+
+`lib/supabase.ts` вже налаштований з `persistSession: true, autoRefreshToken: true, storage: AsyncStorage` — сесія зберігається між запусками.
+
+---
+
+### 20.5 API Layer (`lib/api.ts`)
+
+Базова функція `apiFetch(path, options)`:
+- Автоматично дістає `access_token` через `supabase.auth.getSession()`
+- Підставляє `Authorization: Bearer <token>`
+- При 401 → `supabase.auth.signOut()` (токен протух)
+- При мережевій помилці → кидає `Error` з зрозумілим повідомленням
+
+```
+BASE_URL = 'https://dps-monitor.vercel.app'
+```
+
+| Функція | Endpoint |
+|---|---|
+| `getClients()` | `GET /api/clients` |
+| `getClient(id)` | `GET /api/clients/[id]` |
+| `syncClient(id)` | `POST /api/clients/[id]/sync` |
+| `getDocuments(id)` | `GET /api/clients/[id]/documents` |
+| `getAlerts()` | `GET /api/alerts` |
+| `markAlertsRead(clientId?)` | `POST /api/alerts/mark-read` |
+
+---
+
+### 20.6 State Management
+
+**Рішення: кастомні хуки + локальний React state. Без Redux/Zustand.**
+
+| Дані | Де | Примітка |
+|---|---|---|
+| Session / user | `useSession` (in-memory) | Supabase сам персистить в AsyncStorage |
+| Список клієнтів | `useClients` (in-memory) | Оновлюється при focus екрану |
+| Деталі клієнта | `useClient(id)` (in-memory) | Окремий fetch при кожному переході |
+| Алерти | `useAlerts` (in-memory) | Оновлюється при focus вкладки |
+| Unread count | Похідний від `useAlerts` | Computed значення для Tab badge |
+
+**Supabase Realtime** — не використовується на 1-му етапі. `useFocusEffect` + pull-to-refresh достатньо для MVP.
+
+---
+
+### 20.7 Залежності (пакети до встановлення)
+
+```bash
+# Навігація
+npm install @react-navigation/native @react-navigation/native-stack @react-navigation/bottom-tabs
+npm install react-native-screens react-native-safe-area-context
+
+# Тактильний відгук (UX)
+npx expo install expo-haptics
+```
+
+`@expo/vector-icons` — вже включений в Expo SDK, окремо не встановлювати.
+
+---
+
+### 20.8 План розробки (спринти)
+
+#### Спринт 1 — Основа (Auth + список клієнтів)
+
+**Результат:** застосунок запускається, можна залогінитись і побачити список клієнтів.
+
+1. Встановити пакети навігації
+2. `navigation/types.ts` — типи параметрів
+3. `navigation/RootNavigator.tsx` — Auth/App switch
+4. `hooks/useSession.ts`
+5. `screens/auth/LoginScreen.tsx`
+6. `lib/api.ts` — `apiFetch` + `getClients()`
+7. `hooks/useClients.ts`
+8. `screens/clients/ClientsListScreen.tsx`
+
+#### Спринт 2 — Клієнт + Алерти + Дашборд
+
+**Результат:** повністю робочий основний workflow.
+
+1. Розширити `lib/api.ts`: `getClient`, `getAlerts`, `markAlertsRead`
+2. `navigation/AppTabNavigator.tsx` з badge на Алертах
+3. `screens/clients/ClientDetailScreen.tsx` — профіль, борг, КЕП статус, кнопка Sync
+4. `screens/alerts/AlertsScreen.tsx` — список + "відмітити всі прочитаними"
+5. `screens/dashboard/DashboardScreen.tsx` — summary картки
+6. `components/clients/SummaryCards.tsx`, `components/alerts/AlertListItem.tsx`
+
+#### Спринт 3 — Документи + Профіль + Polish
+
+1. `screens/clients/ClientDocumentsScreen.tsx`
+2. `screens/profile/ProfileScreen.tsx` — email, logout
+3. `screens/auth/ForgotPasswordScreen.tsx`
+4. Pull-to-refresh на всіх списках
+5. `EmptyState`, `LoadingScreen` компоненти
+
+#### Спринт 4 — Push Notifications (потребує EAS Build)
+
+1. `expo-notifications` — реєстрація push token
+2. Нова колонка `expo_push_token` в `user_settings` (міграція 011)
+3. Vercel cron — відправка через Expo Push API при нових алертах
+4. Налаштування EAS Build (не Expo Go)
+
+---
+
+### 20.10 Поточний стан реалізації (станом на 2026-04-04)
+
+**Статус: Спринти 1–3 завершено ✅ | Security audit виправлено ✅ | Тестування на пристрої — наступний крок**
+
+#### Файлова структура (28 файлів, TypeScript 0 помилок)
+
+```
+mobile/
+├── App.tsx
+├── app.config.js                  ← секрети через env vars (CRIT-01/02 fix)
+├── .env                           ← локальні env vars (не комітити)
+├── .gitignore                     ← .env виключено
+├── lib/
+│   ├── supabase.ts                ← SecureStore замість AsyncStorage (HIGH-01 fix)
+│   ├── api.ts                     ← AbortController 15с таймаут (HIGH-02 fix)
+│   ├── constants.ts
+│   ├── secureStorage.ts           ← chunked SecureStore adapter (iOS 2KB ліміт)
+│   └── validation.ts              ← isValidEmail() (HIGH-03 fix)
+├── hooks/
+│   ├── useSession.ts              ← getSession() + onAuthStateChange (MED-02 fix)
+│   ├── useClients.ts
+│   ├── useClient.ts
+│   ├── useAlerts.ts
+│   └── useDocuments.ts
+├── screens/
+│   ├── auth/LoginScreen.tsx       ← валідація email, нормалізовані помилки
+│   ├── auth/ForgotPasswordScreen.tsx
+│   ├── dashboard/DashboardScreen.tsx   ← 2x2 summary картки
+│   ├── clients/ClientsListScreen.tsx
+│   ├── clients/ClientDetailScreen.tsx  ← борг, КЕП, Sync кнопка
+│   ├── clients/ClientDocumentsScreen.tsx
+│   ├── alerts/AlertsScreen.tsx         ← badge, mark-read
+│   └── profile/ProfileScreen.tsx       ← email, logout
+├── components/
+│   ├── ui/LoadingScreen.tsx
+│   ├── ui/EmptyState.tsx
+│   ├── ui/ErrorState.tsx
+│   ├── ui/Badge.tsx
+│   ├── alerts/AlertListItem.tsx
+│   └── clients/SummaryCard.tsx
+└── navigation/
+    ├── RootNavigator.tsx
+    ├── AppTabNavigator.tsx         ← badge непрочитаних на Алертах
+    ├── ClientsStackNavigator.tsx
+    └── types.ts
+```
+
+#### Security audit результати
+
+| # | Severity | Проблема | Статус |
+|---|---|---|---|
+| CRIT-01 | Critical | anon key в коді | ✅ виправлено → app.config.js + .env |
+| CRIT-02 | Critical | Supabase URL в коді | ✅ виправлено → app.config.js |
+| HIGH-01 | High | AsyncStorage незашифрований | ✅ виправлено → SecureStore (chunked) |
+| HIGH-02 | High | Відсутній timeout на fetch | ✅ виправлено → AbortController 15с |
+| HIGH-03 | High | Немає валідації email | ✅ виправлено → isValidEmail() |
+| MED-02 | Medium | Race condition useSession | ✅ виправлено → явний getSession() |
+| MED-01 | Medium | Raw server error у throw | 🔲 відкрито |
+| MED-03 | Medium | Logout не очищає кеш | 🔲 відкрито (актуально при додаванні кешу) |
+| LOW-02 | Low | Certificate pinning | 🔲 розглянути після MVP |
+
+#### Попередження при запуску (не критично)
+
+```
+@react-native-async-storage/async-storage: 3.0.1 → 2.2.0
+expo: 55.0.8 → 55.0.11
+expo-status-bar: 55.0.4 → 55.0.5
+react-native: 0.83.2 → 0.83.4
+react-native-safe-area-context: 5.7.0 → 5.6.2
+react-native-screens: 4.24.0 → 4.23.0
+```
+Виправляється командою: `npx expo install --fix`
+
+---
+
+### 20.11 Наступні кроки (з чого починати наступну сесію)
+
+**Крок 1 — Виправити версії пакетів (5 хв)**
+```bash
+cd "C:\Users\user\Desktop\АІ Ковчег\DPS-Monitor\mobile"
+npx expo install --fix
+npx tsc --noEmit
+```
+
+**Крок 2 — Запустити і протестувати на пристрої**
+```bash
+npx expo start
+```
+Відсканувати QR в **Expo Go** (iOS або Android). Перевірити:
+- [ ] Login працює (email + password)
+- [ ] Список клієнтів завантажується
+- [ ] Перехід на деталі клієнта
+- [ ] Алерти відображаються з badge
+- [ ] Logout очищає сесію
+
+**Крок 3 — Code Review перед комітом**
+Запустити `Code Reviewer` агента на `mobile/` перед першим `git commit`.
+
+**Крок 4 — Спринт 4: Push Notifications (EAS Build)**
+Після успішного тестування — `expo-notifications` + міграція 011 (`expo_push_token` в `user_settings`).
+
+---
+
+### 20.9 Routing агентів для mobile розробки
+
+| Задача | Агент |
+|---|---|
+| Архітектурні питання до коду | `Plan` |
+| Написання React Native / Expo коду | `Mobile App Builder` |
+| Безпека (токени, AsyncStorage vs SecureStore) | `Security Engineer` |
+| Code review перед комітом | `Code Reviewer` |
+| Перевірка API endpoints з mobile | `API Tester` |

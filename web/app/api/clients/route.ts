@@ -31,19 +31,24 @@ export async function GET(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   // Map budget data by client_id for O(1) lookup
+  type BudgetRow = { debt?: number; overpayment?: number }
+  type BudgetData = { calculations?: BudgetRow[] }
   const budgetMap = new Map(
-    (budgets ?? []).map(row => [row.client_id, row.data as Record<string, unknown>])
+    (budgets ?? []).map(row => [row.client_id, row.data as BudgetData | null])
   )
 
   const result = (clients ?? []).map(client => {
     const budget = budgetMap.get(client.id)
+    const calculations = budget?.calculations ?? []
+    const totalDebt = calculations.reduce((s, r) => s + (r.debt ?? 0), 0)
+    const totalOverpayment = calculations.reduce((s, r) => s + (r.overpayment ?? 0), 0)
     return {
       id:           client.id,
       name:         client.name,
       edrpou:       client.edrpou,
-      debt:         (budget?.totalDebt as number | undefined) ?? 0,
-      overpayment:  (budget?.totalOverpayment as number | undefined) ?? 0,
-      status:       (budget?.status as string | undefined) ?? null,
+      debt:         totalDebt,
+      overpayment:  totalOverpayment,
+      status:       null,
     }
   })
 

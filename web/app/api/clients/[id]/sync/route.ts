@@ -6,6 +6,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { mobileAuth } from '@/lib/supabase/mobile'
 import { backendGetKepCredentialByClient } from '@/lib/backend'
 import { signWithKepDecrypted, getCertOrgTaxId, getCertValidTo } from '@/lib/dps/signer'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
@@ -31,18 +32,39 @@ async function dpsFetch(endpoint: string, authHeader: string) {
   return { ok: res.ok, status: res.status, body }
 }
 
-export async function POST(_request: NextRequest, { params }: RouteParams) {
+export async function POST(request: NextRequest, { params }: RouteParams) {
   const { id } = await params
-  const supabase = await createClient()
-  const { data: { user }, error: authError } = await supabase.auth.getUser()
-  if (authError || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // Support both cookie auth (web) and Bearer token auth (mobile)
+  let supabase: Awaited<ReturnType<typeof createClient>>
+  let userId: string
+  let userEmail: string | undefined
+  let accessToken: string
+  const reqAuthHeader = request.headers.get('authorization') ?? ''
+  if (reqAuthHeader.startsWith('Bearer ')) {
+    const { supabase: s, user } = await mobileAuth(request)
+    if (!s || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    supabase = s
+    userId = user.id
+    userEmail = user.email
+    accessToken = reqAuthHeader.slice(7)
+  } else {
+    supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    userId = user.id
+    userEmail = user.email
+    const { data: { session } } = await supabase.auth.getSession()
+    accessToken = session?.access_token ?? ''
+  }
+  if (!accessToken) return NextResponse.json({ error: 'No active session' }, { status: 401 })
 
   // Verify client belongs to this user (fetch name + edrpou for alerts + ЮО auth)
   const { data: client } = await supabase
     .from('clients')
     .select('id, name, edrpou')
     .eq('id', id)
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .single()
   if (!client) return NextResponse.json({ error: 'Client not found' }, { status: 404 })
 
@@ -51,7 +73,7 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
     .from('api_tokens')
     .select('kep_tax_id, kep_valid_to')
     .eq('client_id', id)
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .not('kep_encrypted', 'is', null)
     .single()
 
@@ -59,16 +81,10 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ error: 'KEP not configured for this client' }, { status: 400 })
   }
 
-  // Fetch and decrypt KEP via backend (JWT-authenticated — userId derived from session, not request)
-  const { data: { session } } = await supabase.auth.getSession()
-  if (!session?.access_token) {
-    return NextResponse.json({ error: 'No active session' }, { status: 401 })
-  }
-
   let kepDecrypted: string
   let password: string
   try {
-    const kep = await backendGetKepCredentialByClient(id, session.access_token)
+    const kep = await backendGetKepCredentialByClient(id, accessToken)
     kepDecrypted = kep.kepData
     password = kep.password
   } catch (e) {
@@ -110,7 +126,7 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
     try {
       const validTo = await getCertValidTo(kepDecrypted, password)
       if (validTo) {
-        await supabase.from('api_tokens').update({ kep_valid_to: validTo }).eq('client_id', id).eq('user_id', user.id)
+        await supabase.from('api_tokens').update({ kep_valid_to: validTo }).eq('client_id', id).eq('user_id', userId)
         console.log(`[sync] backfilled kep_valid_to for client=${id}: ${validTo}`)
       }
     } catch (e) {
@@ -161,7 +177,7 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
     const [{ error }, { error: rawError }] = await Promise.all([
       supabase.from('dps_cache').upsert({
         client_id: id,
-        user_id: user.id,
+        user_id: userId,
         data_type: 'profile',
         data: newProfile,
         fetched_at: now,
@@ -169,7 +185,7 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
       }, { onConflict: 'client_id,data_type' }),
       supabase.from('dps_cache').upsert({
         client_id: id,
-        user_id: user.id,
+        user_id: userId,
         data_type: 'profile_raw',
         data: profileResult.body,
         fetched_at: now,
@@ -193,7 +209,7 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
       .from('dps_cache')
       .upsert({
         client_id: id,
-        user_id: user.id,
+        user_id: userId,
         data_type: 'budget',
         data: newBudget,
         fetched_at: now,
@@ -214,7 +230,7 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
     if (detected.length > 0) {
       await supabase.from('alerts').insert(
         detected.map(a => ({
-          user_id: user.id,
+          user_id: userId,
           client_id: id,
           type: a.type,
           message: a.message,
@@ -226,7 +242,7 @@ export async function POST(_request: NextRequest, { params }: RouteParams) {
 
       // Email notification (fire-and-forget, never blocks the response)
       try {
-        const emailAddr = user.email
+        const emailAddr = userEmail
         if (emailAddr) {
           sendAlertEmail({
             to: emailAddr,

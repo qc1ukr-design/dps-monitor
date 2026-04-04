@@ -1,13 +1,12 @@
 /**
  * Formats a monetary amount in Ukrainian hryvnias.
- * DPS API returns amounts in kopecks (1 UAH = 100 kopecks).
+ * DPS API normalizer stores amounts in hryvnias (e.g. 1234.56).
  */
-export function formatMoney(amountKopecks: number): string {
-  const hryvnias = amountKopecks / 100
+export function formatMoney(amount: number): string {
   return new Intl.NumberFormat('uk-UA', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(hryvnias) + ' грн'
+  }).format(amount) + ' грн'
 }
 
 /**

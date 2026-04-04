@@ -27,13 +27,19 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     userId = user.id
   }
 
-  const [{ data: client, error }, { data: cacheRows }] = await Promise.all([
+  const [{ data: client, error }, { data: cacheRows }, { data: kepRow }] = await Promise.all([
     supabase.from('clients').select('id, name, edrpou').eq('id', id).eq('user_id', userId).single(),
     supabase.from('dps_cache')
       .select('data_type, data, fetched_at')
       .eq('client_id', id)
       .eq('user_id', userId)
       .in('data_type', ['budget', 'archive_flag']),
+    supabase.from('kep_credentials')
+      .select('valid_to, owner_name')
+      .eq('client_id', id)
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle(),
   ])
 
   if (error || !client) return NextResponse.json({ error: 'Not found' }, { status: 404 })
@@ -56,6 +62,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     debt:         totalDebt,
     overpayment:  totalOverpayment,
     lastSyncAt:   budgetRow?.fetched_at ?? null,
+    kepValidTo:   kepRow?.valid_to ?? null,
   })
 }
 

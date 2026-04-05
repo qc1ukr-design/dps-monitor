@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import * as Device from 'expo-device'
 import * as Notifications from 'expo-notifications'
+import Constants from 'expo-constants'
 import { Platform } from 'react-native'
 import { supabase } from '../lib/supabase'
 import { API_BASE_URL } from '../lib/constants'
@@ -64,7 +65,10 @@ async function registerForPushNotifications(): Promise<boolean> {
     // getExpoPushTokenAsync може кинути в Expo Go — ловимо gracefully
     let expoPushToken: string
     try {
-      const tokenData = await Notifications.getExpoPushTokenAsync()
+      const projectId = Constants.expoConfig?.extra?.eas?.projectId as string | undefined
+      const tokenData = await Notifications.getExpoPushTokenAsync(
+        projectId ? { projectId } : undefined
+      )
       expoPushToken = tokenData.data
     } catch {
       // Expo Go або інше середовище без push підтримки

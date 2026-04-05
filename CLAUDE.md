@@ -298,9 +298,25 @@ DPS-Monitor/
 
 **Наступні кроки (з чого починати наступну сесію):**
 
-1. **Верифікація cron** — перевірити Vercel logs після 04:00 UTC: всі 6 клієнтів мають `ok: true`.
-2. **Підключення нових типів клієнтів (ФОП-загальна, ЮО)** — ALERT_POLICY.md §3.2–3.4
-3. **EAS Build для реального тестування push на iPhone**
+1. **Тестування (до Apple Developer акаунту):**
+   - Android APK через EAS Build (безкоштовно, без акаунту розробника):
+     `npx eas-cli build --profile preview --platform android`
+   - Встановити APK через QR-код → тестувати push notifications на Android
+   - iOS без push: Expo Go + QR-код (команда `npx expo start`)
+
+2. **Apple Developer акаунт ($99/рік):**
+   - Після придбання: `npx eas-cli build --profile development --platform ios`
+   - Потрібен для TestFlight, push на iPhone, App Store
+
+3. **Нові типи клієнтів** — ФОП-загальна система, ЮО (ALERT_POLICY.md §3.2–3.4)
+
+4. **Верифікація cron** — перевірити Vercel logs о 04:00 UTC: всі 6 клієнтів мають `ok: true`
+
+**EAS конфігурація (станом на 2026-04-05):**
+- `bundleIdentifier`: `com.margoqc.dpsmonitor`
+- `projectId`: `54d0cb67-2510-4545-bea5-0bb0ab9af190` (@margoqc/mobile на expo.dev)
+- `eas.json` створено (профілі: development, preview, production)
+- Apple Developer акаунт: не придбано (потрібен для iOS build і push на iPhone)
 
 Повна документація: `docs/TECHNICAL.md` §20 (розділи 20.10 і 20.11).
 

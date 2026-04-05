@@ -282,34 +282,25 @@ DPS-Monitor/
 
 ---
 
-## 12. Поточні відкриті задачі (станом на 2026-04-03, сесія 10)
+## 12. Поточні відкриті задачі (станом на 2026-04-04, сесія 11)
 
-Всі технічні борги закрито. Система стабільна в production.
+Всі технічні борги закрито. Мобільний MVP завершено і протестовано.
 
-- [x] **Міграції 005–010** — `kep_credentials`, `kep_access_log`, `client_id NOT NULL`, cert-metadata, pg_cron cleanup, KEP_TEST action ✅
-- [x] **`/kep-credentials` route + `/api/kep/*` route** — задеплоєно ✅
-- [x] **Backfill:** 6/6 перенесено в `kep_credentials` ✅
-- [x] **Fallback на `api_tokens` видалено** ✅
-- [x] **Security audit P1–P5** — нуль відкритих вразливостей ✅ (2026-04-03)
-- [x] **Next.js 14 → 16, ESLint 8 → 9** — задеплоєно в production ✅ (2026-04-03)
-- [x] **`web/middleware.ts` → `web/proxy.ts`** — Next.js 16 convention, функція `proxy()` ✅ (2026-04-03)
-- [x] **KEP UI** — `KepUploadForm.tsx` drag & drop, підключено до `settings/page.tsx` ✅ (2026-04-03)
-- [x] **fix(cron)** — `sync-all` читає клієнтів з `kep_credentials`, таймаут 30 с ✅ (2026-04-03)
+- [x] **Міграції 005–010** — завершено ✅
+- [x] **Mobile Спринти 1–3** — завершено, протестовано на iPhone ✅ (2026-04-04)
+- [x] **Mobile Bearer auth** — `proxy.ts`, `mobile.ts`, 3 нові API routes ✅ (2026-04-04)
+- [x] **kep_credentials.tax_id backfill** — 6/6 клієнтів ✅ (2026-04-04)
+- [x] **Budget data fix** — `calculations` сумуються, `formatMoney` виправлено ✅ (2026-04-04)
+- [x] **kepValidTo + lastSyncAt** — `GET /api/clients/[id]` повертає ✅ (2026-04-04)
+- [x] **Mobile Спринт 4 — Push Notifications** — завершено ✅ (2026-04-05)
 
-**Наступна міграція — 011** (при потребі).
+**Наступна міграція — 012** (при потребі).
 
 **Наступні кроки (з чого починати наступну сесію):**
 
-1. **Верифікувати cron** — перевірити `dps_cache.fetched_at` через Supabase API. Всі 6 клієнтів мають мати `fetched_at = 2026-04-04T04:xx`. Особливо АМОЛІТ ПЛЮС (`65713958`) і МАРЬЯНЕНКО (`4e0da942`). Якщо ще не було 04:00 UTC — зачекати.
-
-2. **Мобільний застосунок — тестування на пристрої** (спринти 1–3 + security fixes завершено):
-   - `cd mobile && npx expo install --fix` — виправити версії пакетів (попередження при старті)
-   - `npx tsc --noEmit` — перевірити що 0 помилок після fix
-   - `npx expo start` → відсканувати QR в **Expo Go**
-   - Перевірити: Login → список клієнтів → деталі → алерти → logout
-   - Після успішного тесту → `Code Reviewer` агент → `git commit`
-
-3. **Мобільний Спринт 4** — Push Notifications через `expo-notifications` + міграція 011 (`expo_push_token` в `user_settings`). Потребує EAS Build.
+1. **Верифікація cron** — перевірити Vercel logs після 04:00 UTC: всі 6 клієнтів мають `ok: true`.
+2. **Підключення нових типів клієнтів (ФОП-загальна, ЮО)** — ALERT_POLICY.md §3.2–3.4
+3. **EAS Build для реального тестування push на iPhone**
 
 Повна документація: `docs/TECHNICAL.md` §20 (розділи 20.10 і 20.11).
 

@@ -1,6 +1,6 @@
 # DPS-Monitor — Технічна документація
 
-> Останнє оновлення: 2026-04-03 (сесія 10)
+> Останнє оновлення: 2026-04-04 (сесія 11)
 
 ---
 
@@ -25,13 +25,15 @@
 DPS-Monitor/
 ├── web/                          # Next.js застосунок (Vercel)
 │   ├── app/
-│   │   ├── api/clients/[id]/
-│   │   │   ├── route.ts          # GET/DELETE клієнта
-│   │   │   ├── sync/             # POST — синхронізація з ДПС
-│   │   │   ├── kep/              # POST upload / GET info КЕП
-│   │   │   ├── token/            # POST — збереження UUID-токена
-│   │   │   ├── documents/        # GET — вхідні документи
-│   │   │   └── probe-reports/    # GET — діагностичний ендпоінт (debug)
+│   │   ├── api/clients/
+│   │   │   ├── route.ts          # GET — список клієнтів (mobile Bearer auth)
+│   │   │   └── [id]/
+│   │   │       ├── route.ts      # GET/PATCH/DELETE клієнта (dual auth: cookie + Bearer)
+│   │   │       ├── sync/         # POST — синхронізація з ДПС (dual auth)
+│   │   │       ├── kep/          # POST upload / GET info КЕП
+│   │   │       ├── token/        # POST — збереження UUID-токена
+│   │   │       └── documents/    # GET — вхідні документи (mobile Bearer auth)
+│   │   ├── api/alerts/           # GET — список алертів (mobile Bearer auth)
 │   │   ├── api/cron/             # Автоматична синхронізація (Vercel Cron)
 │   │   ├── api/sync-all/         # POST — синхронізація всіх клієнтів
 │   │   ├── api/export/           # GET — Excel-експорт
@@ -44,6 +46,8 @@ DPS-Monitor/
 │   │           └── settings/     # Налаштування: КЕП, UUID-токен
 │   └── lib/
 │       ├── backend.ts            # HTTP-клієнт до backend (backendGetKep)
+│       ├── supabase/
+│       │   └── mobile.ts         # createMobileClient() + mobileAuth() — Bearer token auth
 │       └── dps/
 │           ├── signer.ts         # Підписання КЕП, читання сертифікату
 │           ├── dps-auth.ts       # OAuth2 авторизація (всі методи)
@@ -239,6 +243,30 @@ function isAllFoForms(reports: TaxReport[]): boolean {
 - `ta/splatp?year=Y` → `dps_cache.budget`
 
 **Авторизація:** `ws/public_api` з підписом ЄДРПОУ (для ЮО) або РНОКПП (для ФО).
+
+**Dual auth (web + mobile):** route підтримує cookie-сесію (web) і Bearer token (mobile). Автоматично визначає метод авторизації за наявністю `Authorization: Bearer` заголовку.
+
+---
+
+## 7а. Mobile API Routes
+
+Окремі ендпоінти для мобільного застосунку. Всі використовують `Authorization: Bearer <supabase-jwt>` (не cookie-сесію). Middleware `proxy.ts` пропускає всі `/api/*` без редиректу на `/login`.
+
+| Endpoint | Файл | Опис |
+|---|---|---|
+| `GET /api/clients` | `web/app/api/clients/route.ts` | Список клієнтів + борг/переплата з `dps_cache` |
+| `GET /api/clients/[id]` | `web/app/api/clients/[id]/route.ts` | Деталі клієнта + борг/переплата + `kepValidTo` + `lastSyncAt` |
+| `POST /api/clients/[id]/sync` | `web/app/api/clients/[id]/sync/route.ts` | Тригер синхронізації з мобільного |
+| `GET /api/clients/[id]/documents` | `web/app/api/clients/[id]/documents/route.ts` | Список документів з кешу |
+| `GET /api/alerts` | `web/app/api/alerts/route.ts` | Алерти з іменами клієнтів |
+
+**`web/lib/supabase/mobile.ts`** — хелпер для Bearer-авторизації:
+```typescript
+export function createMobileClient(accessToken: string)  // Supabase клієнт з Bearer header
+export async function mobileAuth(request: NextRequest)   // → { supabase, user } або null
+```
+
+**Формат даних бюджету:** `dps_cache` зберігає `BudgetCalculations = { calculations: [{debt, overpayment, ...}] }`. API routes підсумовують `calculations` → `totalDebt` / `totalOverpayment` при відповіді. Суми в **гривнях** (не копійках) — так зберігає DPS API.
 
 ---
 
@@ -676,11 +704,16 @@ Telegram-тільки (email не використовується — RESEND_AP
 | 2026-04-03 | **KEP Upload UI — `KepUploadForm.tsx` + підключення** | Новий React-компонент `web/app/dashboard/client/[id]/settings/KepUploadForm.tsx`. Drag & drop зона (підтримувані формати: `.jks, .p12, .pfx, .dat, .cer, .crt, .zs2, .zs3, .zs1, .sk, .zip`), кілька файлів одночасно, захист пароля (`autoComplete="off"`, пароль зануляється після успіху). Security: валідація типу файлу з повідомленням при непідтримуваному форматі, обробка мережевих і серверних помилок. Підключено до `settings/page.tsx`: замінило ~80 рядків inline-форми. `handleKepSuccess` конвертує `KepInfo` → `KepStatus` (`null → undefined`). Race condition guard: `showUploadForm = kepStatus !== null && (!kepStatus.configured || showReplaceForm)`. Коміт `fd7a13c` (2026-04-03, сесія 10). |
 | 2026-04-03 | **Security + Code Review findings (сесія 10)** | P2-01: валідація розміру файлів і кількості у `kep/route.ts` (max 5 файлів, max ~112 KB кожен). P2-02: `e instanceof Error ? e.message.slice(0, 200) : 'KEP parse error'` замість `String(e)` у всіх 3 catch-блоках. WARN-01: `res.json()` обгорнуто в `try/catch` (обробка 502/504). WARN-02: split guard для base64 `if (!base64)`. WARN-03: повідомлення при непідтримуваному типі файлу. WARN-04: `if (res.ok)` перед оновленням стану `handleDeleteToken`. WARN-05: race condition guard `kepStatus !== null`. |
 | 2026-04-03 | **fix(cron): cron читає клієнтів з `kep_credentials`, таймаут 30 с** | Два баги зупинили синхронізацію АМОЛІТ ПЛЮС і МАРЬЯНЕНКО з 1 квітня (коли `fca0ddb` переключив cron на backendGetKep). **Баг 1 (архітектура):** `sync-all` запитував список клієнтів з `api_tokens WHERE kep_encrypted IS NOT NULL`, але нові KEP-uploads пишуться тільки в `kep_credentials`. Виправлено: запит перенесено до `kep_credentials WHERE is_active=true AND client_id IS NOT NULL`; поля `kep_tax_id`/`kep_valid_to` замінено на `tax_id`/`valid_to`. **Баг 2 (Railway cold start):** `backendGetKep` мав 10-секундний таймаут. Railway засинає після ~15 хв бездіяльності і прокидається 15-25 с — перші 1-2 клієнти в черзі таймаутились щоранку о 04:00 UTC. Таймаут збільшено до 30 с. Коміт `4f0a24f`, задеплоєно 2026-04-03 (сесія 10). |
+| 2026-04-04 | **Mobile: Expo SDK 55 → 54 (Expo Go сумісність)** | Expo Go на iPhone підтримує тільки SDK 54. SDK 55 не підтримується. Виправлено: `npm install expo@^54.0.0` + `npx expo install --fix`. TypeScript — 0 помилок. Expo Go тепер відкриває застосунок. |
+| 2026-04-04 | **Mobile: backfill `kep_credentials.tax_id` для 6 клієнтів** | Cron читав `tax_id` з `kep_credentials`, але поле було NULL для всіх 6 (backfill-скрипт мігрував blob, але не `kep_tax_id`). Виправлено 6 PATCH-запитами до Supabase REST API — скопійовано `kep_tax_id` з `api_tokens`. Cron тепер синхронізує всіх клієнтів. |
+| 2026-04-04 | **Mobile: 3 нові API маршрути + Bearer auth** | Причина: мобільний застосунок отримував JSON Parse error — Vercel повертав HTML 404 (маршрути не існували), а middleware редиректив Bearer-запити на `/login`. **Виправлення 1:** створено `GET /api/clients`, `GET /api/alerts`, `GET /api/clients/[id]/documents` — всі використовують `mobileAuth()` (Bearer). **Виправлення 2:** `web/lib/supabase/mobile.ts` — новий хелпер. **Виправлення 3:** `proxy.ts` middleware — виняток змінено з `/api/cron/` на `/api/` (всі API маршрути пропускаються без cookie-редиректу). |
+| 2026-04-04 | **Mobile: виправлено відображення даних бюджету** | Dashboard показував 0.00 грн скрізь. **Баг 1:** `GET /api/clients` читав `budget.totalDebt/totalOverpayment` — такі поля не існують; `dps_cache` зберігає `{ calculations: [...] }`. Виправлено: суміщення `calculations` при відповіді. **Баг 2:** `formatMoney()` ділило на 100 (трактувало як копійки), але DPS API зберігає суми в гривнях. Видалено `/100`. Також: `GET /api/clients/[id]` отримав dual auth (cookie + Bearer) + повертає `kepValidTo` з `kep_credentials`, `lastSyncAt` з `dps_cache`. `POST /api/clients/[id]/sync` — додано Bearer auth. |
+| 2026-04-04 | **Mobile Спринти 1–3: протестовано на iPhone ✅** | Повний flow протестовано в Expo Go: Login → Dashboard → Clients → ClientDetail → Alerts → Logout. Сесія зберігається між запусками (SecureStore). |
 | 2026-04-03 | **Next.js 14 → 16 + ESLint 8 → 9 (сесія 9)** | Оновлено `next` до `16.2.2`, `eslint` до `9.x`, `eslint-config-next` до `16.2.2`. Видалено `.eslintrc.json`, створено `eslint.config.mjs` з нативним flat config (`eslint-config-next@16` більше не потребує FlatCompat). `next.config.mjs`: `serverComponentsExternalPackages` (experimental) → `serverExternalPackages` (top-level); додано `turbopack.root` для коректного визначення workspace у монорепо. Видалено застарілі `eslint-disable` коментарі з `signer.ts` і `dps-auth.ts`. **Критичний fix:** Next.js 16 генерує статичну HTML-оболонку для `'use client'`-сторінок під час build — `createClient()` на рівні тіла компонента кидав помилку (відсутні Supabase env vars у Preview). Виправлено: `createClient()` перенесено всередину обробників подій (`handleLogin`, `handleForgotPassword`, `handleRegister`, `handleSubmit`) у 4 auth-сторінках. npm вразливості закрито (були пов'язані саме з Next.js 14). Гілку `upgrade/nextjs-16` змержено в `main`, задеплоєно на `dps-monitor.vercel.app`. Backup: `git tag stable-2026-04-03` + zip-архів. |
 
 ---
 
-## 17. Поточний стан системи (станом на 2026-04-03, сесія 10)
+## 17. Поточний стан системи (станом на 2026-04-04, сесія 11)
 
 ### ✅ Повністю завершено і стабільно
 
@@ -691,7 +724,8 @@ Telegram-тільки (email не використовується — RESEND_AP
 | **Public KEP REST API** | `/api/kep/*` задеплоєно. Supabase JWT auth. End-to-end протестовано (13 тестів). |
 | **KEP UI (Dashboard)** | `KepUploadForm` — drag & drop, кілька файлів, інформаційне повідомлення після успіху. Підключено до `settings/page.tsx`. Завантаження йде через `kep_credentials`. |
 | **Backend (Railway)** | Express.js сервіс запущений. KMS connectivity підтверджено. Авто-деплой при push у `backend/**`. |
-| **Синхронізація (cron)** | `sync-all` щодня о 04:00 UTC. Клієнти тепер читаються з `kep_credentials` (не `api_tokens`). Railway timeout збільшено до 30 с. Виправлено причину несинхронізації АМОЛІТ ПЛЮС і МАРЬЯНЕНКО — задеплоєно 2026-04-03. |
+| **Синхронізація (cron)** | `sync-all` щодня о 04:00 UTC. Клієнти тепер читаються з `kep_credentials` (не `api_tokens`). Railway timeout збільшено до 30 с. `kep_credentials.tax_id` заповнено для всіх 6 клієнтів (backfill 2026-04-04). |
+| **Мобільний застосунок** | Спринти 1–4 завершено ✅. Expo SDK 54. Bearer auth через `mobileAuth()`. Push Notifications: `expo-notifications`, `usePushNotifications` хук, `POST /api/user/push-token`, cron → Expo Push API. EAS Build потрібен для реального тестування push. |
 | **Алерти** | Борг, статус, нові документи, КЕП expiry (30 днів), stale sync (48 год) — всі типи реалізовані та задеплоєні. |
 | **Telegram-нотифікації** | Бот `8716647020` активний. Щоденні алерти + тижневий дайджест (пн 08:00 UTC). |
 | **Dashboard** | Таблиця з фільтрами/сортуванням/архівом. Колонка "КЕП до" з кольоровим індикатором. |
@@ -721,25 +755,22 @@ Telegram-тільки (email не використовується — RESEND_AP
 | `TOKEN_ENCRYPTION_KEY` | 64 hex символи (ротовано 2026-04-01) | Vercel + Railway |
 | `AWS_KMS_KEY_ID` | `arn:aws:kms:eu-central-1:826496717510:key/17fd8a9a-...` | Railway |
 
-### 🚦 Наступні кроки (в порядку виконання)
+### 🚦 Виконані задачі (сесія 11)
 
-> Міграцію `kep_credentials` завершено повністю (всі кроки A→E). Система повністю на новій архітектурі.
+- [x] **kep_credentials.tax_id backfill** — 6/6 клієнтів заповнено ✅
+- [x] **Mobile Спринти 1–3** — реалізовано і протестовано на iPhone ✅
+- [x] **Mobile API routes** — `/api/clients`, `/api/alerts`, `/api/clients/[id]/documents` ✅
+- [x] **Bearer auth middleware** — `proxy.ts` виняток `/api/cron/` → `/api/` ✅
+- [x] **Budget data fix** — `calculations` сумуються при відповіді ✅
+- [x] **formatMoney fix** — видалено помилковий `/100` ✅
+- [x] **kepValidTo + lastSyncAt** — повертаються у `GET /api/clients/[id]` ✅
+- [x] **Dual auth для sync** — `POST /api/clients/[id]/sync` підтримує Bearer ✅
 
-- [x] **Крок A** — Deploy backend з `kepCredentials.ts` ✅
-- [x] **Крок B** — Backfill: 6/6 перенесено ✅
-- [x] **Крок C** — Верифікація: cron sync-all 6/6 OK, 7 записів `USE_FOR_DPS` в audit log ✅
-- [x] **Крок D** — Upload перемкнуто: `backendUploadKepCredential()` з JWT + kepInfo ✅
-- [x] **Крок E** — Міграція 008: `client_id NOT NULL`, cert-metadata колонки, fallback видалено ✅
+### 💡 Наступні кроки
 
----
-
-### 💡 Наступні кроки (в порядку пріоритетності)
-
-1. **Мобільний застосунок (`mobile/`)** — React Native / Expo, директорія наявна але ще порожня. Використовує `/api/kep/*` (Supabase JWT) та `/api/clients/*`. Наступна велика фіча.
-
-2. **Верифікація cron після виправлення** — 2026-04-04 о 04:00 UTC перевірити Vercel Function Logs для `sync-all`: переконатись що всі 6 клієнтів (включаючи АМОЛІТ ПЛЮС і МАРЬЯНЕНКО) мають `ok: true` у `results`.
-
-3. **Нові функції** — за потребою замовника (нові типи алертів, розширений Excel-звіт, інтеграції).
+1. **EAS Build** — `eas build --profile development --platform ios` для тестування push на реальному iPhone
+2. **Верифікація cron** — перевірити Vercel logs о 04:00 UTC: всі 6 клієнтів мають `ok: true`
+3. **Нові типи клієнтів** — ФОП-загальна система, ЮО (ALERT_POLICY.md §3.2–3.4)
 
 ---
 
@@ -907,7 +938,7 @@ Blob-поля (`encrypted_kep_blob`, `encrypted_dek` тощо) **ніколи** 
 
 Мобільний застосунок для бухгалтерів, що ведуть клієнтів-ФОП та ЮО. Основна цінність — push-сповіщення про нові борги, документи від ДПС, закінчення КЕП. Дублює ключовий функціонал web-дашборду в зручному мобільному форматі.
 
-**Стек:** React Native 0.83.2 · Expo 55 · TypeScript · Supabase Auth (AsyncStorage) · React Navigation
+**Стек:** React Native 0.83.2 · Expo **54** (SDK 55 → 54 downgrade для Expo Go сумісності) · TypeScript · Supabase Auth (SecureStore) · React Navigation
 
 **Директорія:** `mobile/` (монорепо, поряд з `web/` і `backend/`)
 
@@ -1112,9 +1143,9 @@ npx expo install expo-haptics
 
 ---
 
-### 20.10 Поточний стан реалізації (станом на 2026-04-04)
+### 20.10 Поточний стан реалізації (станом на 2026-04-04, сесія 11)
 
-**Статус: Спринти 1–3 завершено ✅ | Security audit виправлено ✅ | Тестування на пристрої — наступний крок**
+**Статус: Спринти 1–3 завершено ✅ | Security audit виправлено ✅ | Протестовано на iPhone ✅**
 
 #### Файлова структура (28 файлів, TypeScript 0 помилок)
 
@@ -1173,45 +1204,31 @@ mobile/
 | MED-03 | Medium | Logout не очищає кеш | 🔲 відкрито (актуально при додаванні кешу) |
 | LOW-02 | Low | Certificate pinning | 🔲 розглянути після MVP |
 
-#### Попередження при запуску (не критично)
+#### Відомі обмеження мобільного MVP
 
-```
-@react-native-async-storage/async-storage: 3.0.1 → 2.2.0
-expo: 55.0.8 → 55.0.11
-expo-status-bar: 55.0.4 → 55.0.5
-react-native: 0.83.2 → 0.83.4
-react-native-safe-area-context: 5.7.0 → 5.6.2
-react-native-screens: 4.24.0 → 4.23.0
-```
-Виправляється командою: `npx expo install --fix`
+- **Звітність** — відсутня (тільки веб). Не вплинуло на MVP scope.
+- **КЕП upload** — тільки веб (security).
+- **Архівування клієнта** — тільки веб.
+- `markAlertsRead` — endpoint `/api/alerts/mark-read` ще не створено на Vercel (mobile поки не позначає як прочитані).
 
 ---
 
 ### 20.11 Наступні кроки (з чого починати наступну сесію)
 
-**Крок 1 — Виправити версії пакетів (5 хв)**
-```bash
-cd "C:\Users\user\Desktop\АІ Ковчег\DPS-Monitor\mobile"
-npx expo install --fix
-npx tsc --noEmit
-```
+**Спринти 1–3 завершено ✅. Застосунок протестовано на iPhone.**
 
-**Крок 2 — Запустити і протестувати на пристрої**
-```bash
-npx expo start
-```
-Відсканувати QR в **Expo Go** (iOS або Android). Перевірити:
-- [ ] Login працює (email + password)
-- [ ] Список клієнтів завантажується
-- [ ] Перехід на деталі клієнта
-- [ ] Алерти відображаються з badge
-- [ ] Logout очищає сесію
+**Спринт 4 — Push Notifications (EAS Build)**
 
-**Крок 3 — Code Review перед комітом**
-Запустити `Code Reviewer` агента на `mobile/` перед першим `git commit`.
+1. Встановити `expo-notifications`
+2. Міграція 011: додати `expo_push_token TEXT` у `user_settings`
+3. `ProfileScreen.tsx` — запит дозволу + збереження токена через `/api/user/push-token`
+4. Новий API route: `POST /api/user/push-token` — зберігає `expo_push_token` в `user_settings`
+5. `sync-all` cron — після генерації алертів відправляти push через **Expo Push API** (`https://exp.host/--/api/v2/push/send`)
+6. EAS Build: `eas build --platform ios --profile preview` для TestFlight дистрибуції
 
-**Крок 4 — Спринт 4: Push Notifications (EAS Build)**
-Після успішного тестування — `expo-notifications` + міграція 011 (`expo_push_token` в `user_settings`).
+> ⚠️ Expo Go не підтримує `expo-notifications` повністю (тільки foreground). Для реальних push-повідомлень потрібен EAS Build (власний `.ipa`).
+
+**Наступна міграція — 011.**
 
 ---
 
@@ -1224,3 +1241,38 @@ npx expo start
 | Безпека (токени, AsyncStorage vs SecureStore) | `Security Engineer` |
 | Code review перед комітом | `Code Reviewer` |
 | Перевірка API endpoints з mobile | `API Tester` |
+
+---
+
+## 19. Push Notifications (Mobile Sprint 4)
+
+> Додано: 2026-04-05 (сесія 12)
+
+### 19.1 Архітектура
+
+```
+iPhone → usePushNotifications → POST /api/user/push-token → user_settings.expo_push_token
+Vercel Cron (04:00 UTC) → нові алерти → Expo Push API → iPhone
+```
+
+### 19.2 Компоненти
+
+| Компонент | Файл | Призначення |
+|---|---|---|
+| Міграція 011 | `supabase/migrations/011_expo_push_token.sql` | Колонка `expo_push_token TEXT` в `user_settings` + partial index |
+| Mobile хук | `mobile/hooks/usePushNotifications.ts` | Реєстрація push token після логіну |
+| API route | `web/app/api/user/push-token/route.ts` | `POST` — зберігає token (Bearer auth, upsert) |
+| Cron | `web/app/api/cron/sync-all/route.ts` | `sendExpoPush()` при нових алертах |
+
+### 19.3 Expo Push API
+
+- URL: `POST https://exp.host/--/api/v2/push/send`
+- Безкоштовно, без ключів
+- Fire-and-forget з таймаутом 10 сек
+- Token формат: `ExponentPushToken[xxx]` або `ExpoPushToken[xxx]`
+
+### 19.4 Обмеження
+
+- Push не працює в **Expo Go** — потрібен EAS Build
+- Протухлі токени (`DeviceNotRegistered`) наразі не очищаються автоматично — технічний борг
+- `usePushNotifications` реєструє токен тільки один раз (guard через `useRef`) і повторює при невдалій реєстрації

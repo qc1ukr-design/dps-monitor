@@ -35,6 +35,19 @@ async function dpsFetch(endpoint: string, authHeader: string) {
   return { ok: res.ok, status: res.status, body }
 }
 
+async function sendExpoPush(token: string, title: string, body: string): Promise<void> {
+  try {
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ to: token, title, body, sound: 'default' }),
+      signal: AbortSignal.timeout(10000),
+    })
+  } catch {
+    // fire-and-forget — не зупиняємо cron при помилці push
+  }
+}
+
 export async function GET(request: NextRequest) {
   // ── Auth: verify Vercel cron secret ──────────────────────────────────────
   const cronSecret = process.env.CRON_SECRET
@@ -95,6 +108,18 @@ export async function GET(request: NextRequest) {
 
   for (const s of settings ?? []) {
     if (s.telegram_chat_id) userTelegramMap.set(s.user_id, s.telegram_chat_id)
+  }
+
+  // Fetch Expo push tokens for users who have them (push відправляємо всім у кого є token)
+  const { data: pushSettings } = await supabase
+    .from('user_settings')
+    .select('user_id, expo_push_token')
+    .in('user_id', uniqueUserIds)
+    .not('expo_push_token', 'is', null)
+
+  const userPushTokenMap = new Map<string, string>()
+  for (const s of pushSettings ?? []) {
+    if (s.expo_push_token) userPushTokenMap.set(s.user_id, s.expo_push_token)
   }
 
   // ── Process each client ───────────────────────────────────────────────────
@@ -187,6 +212,13 @@ export async function GET(request: NextRequest) {
                 const lines = newDocAlerts.map(a => `${alertIcon(a.type)} ${a.message}`).join('\n')
                 await sendTelegramMessage(tgChatId, `<b>ДПС-Монітор</b>\n\n${lines}`)
               }
+
+              // Expo Push
+              const pushToken = userPushTokenMap.get(userId)
+              if (pushToken) {
+                const summary = `${newDocAlerts.length} нових документів для ${clientName}`
+                await sendExpoPush(pushToken, 'ДПС-Монітор', summary)
+              }
             }
           }
 
@@ -232,6 +264,13 @@ export async function GET(request: NextRequest) {
           if (tgChatId) {
             const lines = detected.map(a => `${alertIcon(a.type)} ${a.message}`).join('\n')
             await sendTelegramMessage(tgChatId, `<b>ДПС-Монітор</b>\n\n${lines}`)
+          }
+
+          // Expo Push
+          const pushToken = userPushTokenMap.get(userId)
+          if (pushToken) {
+            const summary = detected.map(a => a.message).join('; ').slice(0, 150)
+            await sendExpoPush(pushToken, 'ДПС-Монітор', summary)
           }
         }
       }
@@ -305,6 +344,13 @@ export async function GET(request: NextRequest) {
     if (tgChatId) {
       const icon = alertType === 'kep_expired' ? '🚫' : '🔑'
       await sendTelegramMessage(tgChatId, `<b>ДПС-Монітор</b>\n\n${icon} ${message}`)
+    }
+
+    // Expo Push
+    const kepPushToken = userPushTokenMap.get(token.user_id)
+    if (kepPushToken) {
+      const icon = alertType === 'kep_expired' ? '🚫' : '🔑'
+      await sendExpoPush(kepPushToken, 'ДПС-Монітор', `${icon} ${message}`)
     }
 
     // Email

@@ -1,6 +1,7 @@
 import React from 'react'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { useSession } from '../hooks/useSession'
+import { usePushNotifications } from '../hooks/usePushNotifications'
 import { AuthStackParamList } from './types'
 import LoadingScreen from '../components/ui/LoadingScreen'
 import LoginScreen from '../screens/auth/LoginScreen'
@@ -8,6 +9,11 @@ import ForgotPasswordScreen from '../screens/auth/ForgotPasswordScreen'
 import AppTabNavigator from './AppTabNavigator'
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>()
+
+function AuthenticatedRoot(): React.JSX.Element {
+  usePushNotifications()
+  return <AppTabNavigator />
+}
 
 export default function RootNavigator(): React.JSX.Element {
   const { session, loading } = useSession()
@@ -17,7 +23,7 @@ export default function RootNavigator(): React.JSX.Element {
   }
 
   if (session !== null) {
-    return <AppTabNavigator />
+    return <AuthenticatedRoot />
   }
 
   return (

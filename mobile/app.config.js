@@ -7,7 +7,7 @@ module.exports = {
     eas: {
       // projectId заповнюється автоматично після `eas init`
       // або вручну з Expo Dashboard: expo.dev/accounts/<user>/projects/<slug>
-      projectId: process.env.EAS_PROJECT_ID ?? '',
+      projectId: '54d0cb67-2510-4545-bea5-0bb0ab9af190',
     },
   },
 }

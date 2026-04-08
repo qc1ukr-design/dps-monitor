@@ -82,9 +82,10 @@ export async function GET(request: NextRequest) {
   const clientIds = tokens.map(t => t.client_id)
   const { data: clients } = await supabase
     .from('clients')
-    .select('id, name')
+    .select('id, name, edrpou')
     .in('id', clientIds)
-  const clientMap = new Map(clients?.map(c => [c.id, c.name]) ?? [])
+  const clientMap    = new Map(clients?.map(c => [c.id, c.name])   ?? [])
+  const clientEdrpouMap = new Map(clients?.map(c => [c.id, c.edrpou ?? '']) ?? [])
 
   // ── User email + Telegram lookup (for notifications) ─────────────────────
   const uniqueUserIds = Array.from(new Set(tokens.map(t => t.user_id)))
@@ -130,7 +131,13 @@ export async function GET(request: NextRequest) {
     try {
       // Fetch and decrypt KEP via backend (userId resolved server-side from kep_credentials)
       const { kepData: kepDecrypted, password } = await backendGetKep(clientId)
-      const taxId = token.tax_id?.trim() ?? ''
+      // For ЮО (legal entities): clients.edrpou is the 8-digit ЄДРПОУ.
+      // kep_credentials.tax_id stores the director's РНОКПП (10 digits).
+      // DPS requires signing with ЄДРПОУ for ЮО — same logic as sync/route.ts.
+      const clientEdrpou = clientEdrpouMap.get(clientId)?.trim() ?? ''
+      const taxId = (clientEdrpou && /^\d{8}$/.test(clientEdrpou))
+        ? clientEdrpou
+        : (token.tax_id?.trim() ?? '')
       if (!taxId) { errors++; continue }
 
       // Sign

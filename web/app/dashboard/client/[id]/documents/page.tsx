@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
+import { backendGetKepCredentialByClient } from '@/lib/backend'
 import { decrypt } from '@/lib/crypto'
 import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeDocuments } from '@/lib/dps/normalizer'
@@ -20,14 +21,24 @@ async function fetchDocuments(
 ): Promise<DocumentsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean; debugError?: string }> {
   const supabase = await createClient()
 
+  // Check for active KEP in kep_credentials (new table, KMS-encrypted)
+  const { data: kepCred } = await supabase
+    .from('kep_credentials')
+    .select('tax_id')
+    .eq('client_id', clientId)
+    .eq('is_active', true)
+    .limit(1)
+    .maybeSingle()
+
+  // Check for UUID fallback token in api_tokens
   const { data: tokenRow } = await supabase
     .from('api_tokens')
-    .select('kep_encrypted, kep_password_encrypted, kep_tax_id, token_encrypted')
+    .select('kep_tax_id, token_encrypted')
     .eq('client_id', clientId)
     .eq('user_id', userId)
-    .single()
+    .maybeSingle()
 
-  const hasKep  = !!(tokenRow?.kep_encrypted && tokenRow?.kep_password_encrypted)
+  const hasKep  = !!kepCred
   const hasUuid = !!tokenRow?.token_encrypted
 
   if (!hasKep && !hasUuid) {
@@ -37,15 +48,16 @@ async function fetchDocuments(
   const opts = { Accept: 'application/json' }
   let kepDebug = '', uuidDebug = ''
 
-  // ── KEP: ws/public_api/post/incoming (direct KEP Bearer) ──────────────────
+  // ── KEP: ws/public_api/post/incoming (via backend decrypt — KMS envelope) ──
   if (hasKep) {
     try {
-      const kepDecrypted = decrypt(tokenRow!.kep_encrypted)
-      const kepPass      = decrypt(tokenRow!.kep_password_encrypted)
-      const kepTaxId     = (tokenRow!.kep_tax_id ?? '').trim()
-      // For ЮО: sign with ЄДРПОУ (8-digit) for org context; ФО: use kep_tax_id
-      const taxId        = (clientEdrpou && /^\d{8}$/.test(clientEdrpou)) ? clientEdrpou : kepTaxId
-      const kepAuth      = await signWithKepDecrypted(kepDecrypted, kepPass, taxId)
+      const { data: { session } } = await supabase.auth.getSession()
+      const accessToken = session?.access_token ?? ''
+      const { kepData: kepDecrypted, password: kepPass } = await backendGetKepCredentialByClient(clientId, accessToken)
+      const kepTaxId = (kepCred!.tax_id ?? tokenRow?.kep_tax_id ?? '').trim()
+      // For ЮО: sign with ЄДРПОУ (8-digit); ФО/ФОП: use РНОКПП from kep_credentials
+      const taxId    = (clientEdrpou && /^\d{8}$/.test(clientEdrpou)) ? clientEdrpou : kepTaxId
+      const kepAuth  = await signWithKepDecrypted(kepDecrypted, kepPass, taxId)
 
       const res = await fetch(`${DPS_PUBLIC}/post/incoming?page=0&size=100`, {
         headers: { Authorization: kepAuth, ...opts },
@@ -77,7 +89,7 @@ async function fetchDocuments(
   // ── Fallback: UUID Bearer token via ws/a ────────────────────────────────────
   if (hasUuid) {
     try {
-      const token = decrypt(tokenRow!.token_encrypted).trim()
+      const token = decrypt(tokenRow!.token_encrypted!).trim()
       const res = await fetch(`${DPS_A}/corr/correspondence?page=0&size=50`, {
         headers: { Authorization: `Bearer ${token}`, ...opts },
         signal: AbortSignal.timeout(15000),

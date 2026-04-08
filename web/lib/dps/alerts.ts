@@ -51,26 +51,33 @@ function stripHtml(html: string): string {
 
 /**
  * Detect alerts for newly arrived DPS documents.
- * rawDocs  — full document list from DPS (current fetch)
+ * rawDocs   — full document list from DPS (current fetch)
  * cachedIds — Set of document IDs already seen (from dps_cache)
+ * edrpou    — clients.edrpou (8 digits = ЮО, 10 digits = ФО/ФОП)
  *
  * Rules per ALERT_POLICY.md:
- *  - J1499202 (квитанція)       → skip
- *  - BOTB0501 (нарахування):
- *      only ЄСВ/ЄП/ВЗ codes     → skip (routine for ФОП-єдинник)
- *      any other tax code        → alert
- *  - csti=9999                   → skip (spam)
- *  - D0300201 "не за адресою"    → skip
- *  - D0300201 with /ІПК/         → alert (ІПК)
- *  - D0300201 other              → alert (лист)
- *  - F1419104 (довідка ДРФО)     → alert
- *  - PDI* (запит від ДПІ)        → alert
+ *  - J1499202 (квитанція)         → skip
+ *  - csti=9999                    → skip (spam)
+ *  - BOTB0501 for ФОП-єдинник:
+ *      only ЄСВ/ЄП/ВЗ codes      → skip (routine)
+ *      any other tax code         → alert
+ *  - BOTB0501 for ЮО (edrpou 8-digit):
+ *      text contains "узгоджені"  → skip (routine approval)
+ *      text contains "Відмова"    → alert
+ *      anything else              → alert
+ *  - D0300201 "не за адресою"     → skip
+ *  - D0300201 with /ІПК/          → alert (ІПК)
+ *  - D0300201 other               → alert (лист)
+ *  - F1419104 (довідка ДРФО)      → alert
+ *  - PDI* (запит від ДПІ)         → alert
  */
 export function detectDocumentAlerts(
   rawDocs: RawDpsDoc[],
   cachedIds: Set<string>,
-  clientName: string
+  clientName: string,
+  edrpou?: string
 ): AlertPayload[] {
+  const isYuo = !!edrpou && /^\d{8}$/.test(edrpou)
   const alerts: AlertPayload[] = []
 
   for (const doc of rawDocs) {
@@ -91,17 +98,28 @@ export function detectDocumentAlerts(
 
     // BOTB0501 — нарахування зобов'язань
     if (cdoc === 'BOTB0501') {
-      if (isRoutineBotb0501(text)) continue
-      // Non-routine tax — extract first non-routine line for context
-      const taxLine = text.split('по ').slice(1).find(l => {
-        const code = l.match(/\b(\d{8})\b/)?.[1]
-        return code && !ROUTINE_BUDGET_CODES.has(code)
-      }) ?? text.slice(0, 120)
-      alerts.push({
-        type: 'new_document',
-        message: `${clientName}: нове нарахування від ДПС (${date}) — ${taxLine.slice(0, 100)}`,
-        data: { docId: id, cdoc, csti, dateIn: doc.dateIn },
-      })
+      if (isYuo) {
+        // ЮО rule (ALERT_POLICY.md §3.3): "узгоджені" = routine, all else = alert
+        if (text.includes('узгоджені')) continue
+        const subject = text.slice(0, 120)
+        alerts.push({
+          type: 'new_document',
+          message: `${clientName}: нове повідомлення від ДПС (${date}) — ${subject}`,
+          data: { docId: id, cdoc, csti, dateIn: doc.dateIn },
+        })
+      } else {
+        // ФОП-єдинник rule (ALERT_POLICY.md §3.1): routine codes = skip
+        if (isRoutineBotb0501(text)) continue
+        const taxLine = text.split('по ').slice(1).find(l => {
+          const code = l.match(/\b(\d{8})\b/)?.[1]
+          return code && !ROUTINE_BUDGET_CODES.has(code)
+        }) ?? text.slice(0, 120)
+        alerts.push({
+          type: 'new_document',
+          message: `${clientName}: нове нарахування від ДПС (${date}) — ${taxLine.slice(0, 100)}`,
+          data: { docId: id, cdoc, csti, dateIn: doc.dateIn },
+        })
+      }
       continue
     }
 

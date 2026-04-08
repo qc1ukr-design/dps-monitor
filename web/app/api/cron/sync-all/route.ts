@@ -199,7 +199,7 @@ export async function GET(request: NextRequest) {
 
           // Only alert when we have a prior cache (first run = just seed, no alerts)
           if (cachedIds.size > 0) {
-            const newDocAlerts = detectDocumentAlerts(rawDocs, cachedIds, clientName)
+            const newDocAlerts = detectDocumentAlerts(rawDocs, cachedIds, clientName, clientEdrpouMap.get(clientId))
             if (newDocAlerts.length > 0) {
               await supabase.from('alerts').insert(
                 newDocAlerts.map(a => ({

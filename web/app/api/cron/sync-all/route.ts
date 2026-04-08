@@ -17,6 +17,7 @@ import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeProfile, normalizeBudget } from '@/lib/dps/normalizer'
 import { detectAlerts, detectDocumentAlerts, alertIcon } from '@/lib/dps/alerts'
 import type { RawDpsDoc } from '@/lib/dps/alerts'
+import { normalizeDocuments } from '@/lib/dps/normalizer'
 import { sendAlertEmail } from '@/lib/email'
 import { sendTelegramMessage } from '@/lib/telegram'
 
@@ -229,12 +230,20 @@ export async function GET(request: NextRequest) {
             }
           }
 
-          // Update document IDs cache
-          await supabase.from('dps_cache').upsert({
-            client_id: clientId, user_id: userId,
-            data_type: 'documents', data: { ids: freshIds },
-            fetched_at: now, is_mock: false,
-          }, { onConflict: 'client_id,data_type' })
+          // Update document IDs cache (for deduplication) + full docs cache (for UI)
+          const normalizedDocs = normalizeDocuments(docsResult.body)
+          await Promise.all([
+            supabase.from('dps_cache').upsert({
+              client_id: clientId, user_id: userId,
+              data_type: 'documents', data: { ids: freshIds },
+              fetched_at: now, is_mock: false,
+            }, { onConflict: 'client_id,data_type' }),
+            supabase.from('dps_cache').upsert({
+              client_id: clientId, user_id: userId,
+              data_type: 'documents_full', data: normalizedDocs,
+              fetched_at: now, is_mock: false,
+            }, { onConflict: 'client_id,data_type' }),
+          ])
         }
       }
 

@@ -1,9 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import { backendGetKepCredentialByClient } from '@/lib/backend'
 import { decrypt } from '@/lib/crypto'
-import { signWithKepDecrypted } from '@/lib/dps/signer'
 import { normalizeDocuments } from '@/lib/dps/normalizer'
 import type { DocumentsList, IncomingDocument } from '@/lib/dps/types'
 
@@ -11,8 +9,7 @@ interface PageProps {
   params: Promise<{ id: string }>
 }
 
-const DPS_PUBLIC = 'https://cabinet.tax.gov.ua/ws/public_api'
-const DPS_A      = 'https://cabinet.tax.gov.ua/ws/a'
+const DPS_A = 'https://cabinet.tax.gov.ua/ws/a'
 
 async function fetchDocuments(
   clientId: string,
@@ -21,22 +18,38 @@ async function fetchDocuments(
 ): Promise<DocumentsList & { hasToken: boolean; isMock: boolean; tokenExpired: boolean; debugError?: string }> {
   const supabase = await createClient()
 
-  // Check for active KEP in kep_credentials (new table, KMS-encrypted)
-  const { data: kepCred } = await supabase
-    .from('kep_credentials')
-    .select('tax_id')
-    .eq('client_id', clientId)
-    .eq('is_active', true)
-    .limit(1)
-    .maybeSingle()
+  // ── 1. Try dps_cache (populated by daily cron) ───────────────────────────
+  // This is the primary path — avoids any backend/KEP calls on the page render.
+  const [{ data: fullCache }, { data: kepCred }, { data: tokenRow }] = await Promise.all([
+    supabase
+      .from('dps_cache')
+      .select('data, fetched_at')
+      .eq('client_id', clientId)
+      .eq('user_id', userId)
+      .eq('data_type', 'documents_full')
+      .maybeSingle(),
+    supabase
+      .from('kep_credentials')
+      .select('tax_id')
+      .eq('client_id', clientId)
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from('api_tokens')
+      .select('kep_tax_id, token_encrypted')
+      .eq('client_id', clientId)
+      .eq('user_id', userId)
+      .maybeSingle(),
+  ])
 
-  // Check for UUID fallback token in api_tokens
-  const { data: tokenRow } = await supabase
-    .from('api_tokens')
-    .select('kep_tax_id, token_encrypted')
-    .eq('client_id', clientId)
-    .eq('user_id', userId)
-    .maybeSingle()
+  // Return cached documents if available (from last cron run)
+  if (fullCache?.data) {
+    const cached = fullCache.data as DocumentsList
+    if (Array.isArray(cached.documents) && cached.documents.length > 0) {
+      return { ...cached, hasToken: true, isMock: false, tokenExpired: false }
+    }
+  }
 
   const hasKep  = !!kepCred
   const hasUuid = !!tokenRow?.token_encrypted
@@ -45,48 +58,10 @@ async function fetchDocuments(
     return { documents: [], total: 0, hasToken: false, isMock: true, tokenExpired: false }
   }
 
+  // ── 2. Live fetch fallback (UUID token only — KEP path needs backend) ────
   const opts = { Accept: 'application/json' }
-  let kepDebug = '', uuidDebug = ''
+  let uuidDebug = ''
 
-  // ── KEP: ws/public_api/post/incoming (via backend decrypt — KMS envelope) ──
-  if (hasKep) {
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const accessToken = session?.access_token ?? ''
-      const { kepData: kepDecrypted, password: kepPass } = await backendGetKepCredentialByClient(clientId, accessToken)
-      const kepTaxId = (kepCred!.tax_id ?? tokenRow?.kep_tax_id ?? '').trim()
-      // For ЮО: sign with ЄДРПОУ (8-digit); ФО/ФОП: use РНОКПП from kep_credentials
-      const taxId    = (clientEdrpou && /^\d{8}$/.test(clientEdrpou)) ? clientEdrpou : kepTaxId
-      const kepAuth  = await signWithKepDecrypted(kepDecrypted, kepPass, taxId)
-
-      const res = await fetch(`${DPS_PUBLIC}/post/incoming?page=0&size=100`, {
-        headers: { Authorization: kepAuth, ...opts },
-        signal: AbortSignal.timeout(10000),
-        cache: 'no-store',
-      })
-      const rawText = await res.text()
-      if (res.ok) {
-        let rawJson: unknown = null
-        try { rawJson = JSON.parse(rawText) } catch { /* not JSON */ }
-        if (rawJson !== null) {
-          const result = normalizeDocuments(rawJson)
-          if (result.documents.length === 0) {
-            kepDebug = `kep→200 empty. raw: ${rawText.slice(0, 300)}`
-          } else {
-            return { ...result, hasToken: true, isMock: false, tokenExpired: false }
-          }
-        } else {
-          kepDebug = `kep→200 non-JSON: ${rawText.slice(0, 200)}`
-        }
-      } else {
-        kepDebug = `kep→${res.status}: ${rawText.slice(0, 200)}`
-      }
-    } catch (e) {
-      kepDebug = `kep→${String(e).slice(0, 200)}`
-    }
-  }
-
-  // ── Fallback: UUID Bearer token via ws/a ────────────────────────────────────
   if (hasUuid) {
     try {
       const token = decrypt(tokenRow!.token_encrypted!).trim()
@@ -106,7 +81,7 @@ async function fetchDocuments(
     }
   }
 
-  const debugError = [kepDebug, uuidDebug].filter(Boolean).join(' | ')
+  const debugError = uuidDebug || (hasKep ? 'Документи будуть доступні після наступної синхронізації (04:00 UTC)' : '')
   return { documents: [], total: 0, hasToken: true, isMock: true, tokenExpired: false, debugError }
 }
 

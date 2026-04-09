@@ -28,7 +28,7 @@ export default function ClientsStackNavigator(): React.JSX.Element {
       <Stack.Screen
         name="ClientsList"
         component={ClientsListScreen}
-        options={{ title: 'Клієнти', headerShown: false }}
+        options={{ title: 'Клієнти' }}
       />
       <Stack.Screen
         name="ClientDetail"

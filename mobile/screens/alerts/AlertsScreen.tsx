@@ -7,16 +7,20 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
+import { BottomTabScreenProps } from '@react-navigation/bottom-tabs'
 import { useAlerts } from '../../hooks/useAlerts'
 import { markAlertsRead } from '../../lib/api'
 import { Alert } from '../../lib/api'
 import { COLORS } from '../../lib/constants'
+import { AppTabParamList } from '../../navigation/types'
 import AlertListItem from '../../components/alerts/AlertListItem'
 import LoadingScreen from '../../components/ui/LoadingScreen'
 import EmptyState from '../../components/ui/EmptyState'
 import ErrorState from '../../components/ui/ErrorState'
 
-export default function AlertsScreen(): React.JSX.Element {
+type Props = BottomTabScreenProps<AppTabParamList, 'Alerts'>
+
+export default function AlertsScreen({ navigation }: Props): React.JSX.Element {
   const { alerts, loading, error, refresh } = useAlerts()
   const [refreshing, setRefreshing] = React.useState(false)
   const [marking, setMarking] = React.useState(false)
@@ -42,15 +46,23 @@ export default function AlertsScreen(): React.JSX.Element {
 
   const handleAlertPress = useCallback(
     async (alert: Alert): Promise<void> => {
-      if (alert.is_read) return
       try {
-        await markAlertsRead(alert.client_id)
-        await refresh()
+        if (!alert.is_read) {
+          await markAlertsRead(alert.client_id)
+          await refresh()
+        }
       } catch {
         // ignore
       }
+      navigation.navigate('Clients', {
+        screen: 'ClientDetail',
+        params: {
+          clientId: alert.client_id,
+          clientName: alert.client_name ?? 'Клієнт',
+        },
+      })
     },
-    [refresh]
+    [refresh, navigation]
   )
 
   if (loading && !refreshing) {

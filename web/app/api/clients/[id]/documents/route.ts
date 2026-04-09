@@ -43,18 +43,23 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  type DocItem = { id?: string; cdoc?: string; name?: string; date?: string; csti?: string; text?: string }
+  type DocItem = {
+    id?: string; date?: string; type?: string; number?: string
+    status?: string; fromOrg?: string; subject?: string; hasAttachments?: boolean
+    // legacy fields
+    cdoc?: string; name?: string; csti?: string; text?: string
+  }
   type DocsCache = { documents?: DocItem[]; total?: number }
 
   if (fullCache?.data) {
     const cached = fullCache.data as DocsCache
     const docs = (cached.documents ?? []).map((d, i) => ({
-      id:   d.id   ?? String(i),
-      cdoc: d.cdoc ?? '',
-      name: d.name ?? d.cdoc ?? 'Документ',
-      date: d.date ?? fullCache.fetched_at ?? new Date().toISOString(),
-      csti: d.csti,
-      text: d.text,
+      id:   d.id     ?? String(i),
+      cdoc: d.type   ?? d.cdoc ?? '',
+      name: d.subject ?? d.name ?? d.type ?? 'Документ',
+      date: d.date   ?? fullCache.fetched_at ?? new Date().toISOString(),
+      csti: d.fromOrg ?? d.csti,
+      text: d.status  ?? d.text,
     }))
     return NextResponse.json(docs)
   }

@@ -28,21 +28,24 @@ export interface RawDpsDoc {
 }
 
 // ── Budget classification codes that are ROUTINE for ФОП on simplified tax ───
-// Per ALERT_POLICY.md §3.1 — update when adding ЮО or ФОП-загальник clients
+// Per ALERT_POLICY.md §3.1 — ЄСВ + ЄП + ВЗ are routine; see ROUTINE_BUDGET_CODES_GENERAL for general system
 const ROUTINE_BUDGET_CODES = new Set(['71040000', '18050400', '11011700'])
 
+// ── Routine codes for ФОП on general tax system (ALERT_POLICY.md §3.2) ──────
+// Only ЄСВ is routine; ПДФО (~18010400) and ВЗ (11011700) trigger alerts
+const ROUTINE_BUDGET_CODES_GENERAL = new Set(['71040000'])
+
 /**
- * Returns true if a BOTB0501 message contains ONLY routine taxes
- * (ЄСВ / ЄП / ВЗ for ФОП on simplified system).
+ * Returns true if a BOTB0501 message contains ONLY routine taxes.
  * Extracts all 8-digit budget classification codes from the text.
  */
-function isRoutineBotb0501(text: string): boolean {
+function isRoutineBotb0501(text: string, routineCodes: Set<string>): boolean {
   const codes: string[] = []
   const re = /\b(\d{8})\b/g
   let m: RegExpExecArray | null
   while ((m = re.exec(text)) !== null) codes.push(m[1])
   if (codes.length === 0) return false // no codes found → treat as non-routine
-  return codes.every(code => ROUTINE_BUDGET_CODES.has(code))
+  return codes.every(code => routineCodes.has(code))
 }
 
 function stripHtml(html: string): string {
@@ -54,13 +57,17 @@ function stripHtml(html: string): string {
  * rawDocs   — full document list from DPS (current fetch)
  * cachedIds — Set of document IDs already seen (from dps_cache)
  * edrpou    — clients.edrpou (8 digits = ЮО, 10 digits = ФО/ФОП)
+ * taxSystem — 'simplified' (default) or 'general' (ФОП загальна система)
  *
  * Rules per ALERT_POLICY.md:
  *  - J1499202 (квитанція)         → skip
  *  - csti=9999                    → skip (spam)
- *  - BOTB0501 for ФОП-єдинник:
+ *  - BOTB0501 for ФОП-спрощена:
  *      only ЄСВ/ЄП/ВЗ codes      → skip (routine)
  *      any other tax code         → alert
+ *  - BOTB0501 for ФОП-загальна:
+ *      only ЄСВ code              → skip (routine)
+ *      ПДФО / ВЗ / other code     → alert
  *  - BOTB0501 for ЮО (edrpou 8-digit):
  *      text contains "узгоджені"  → skip (routine approval)
  *      text contains "Відмова"    → alert
@@ -75,7 +82,8 @@ export function detectDocumentAlerts(
   rawDocs: RawDpsDoc[],
   cachedIds: Set<string>,
   clientName: string,
-  edrpou?: string
+  edrpou?: string,
+  taxSystem?: 'simplified' | 'general'
 ): AlertPayload[] {
   const isYuo = !!edrpou && /^\d{8}$/.test(edrpou)
   const alerts: AlertPayload[] = []
@@ -108,11 +116,11 @@ export function detectDocumentAlerts(
           data: { docId: id, cdoc, csti, dateIn: doc.dateIn },
         })
       } else {
-        // ФОП-єдинник rule (ALERT_POLICY.md §3.1): routine codes = skip
-        if (isRoutineBotb0501(text)) continue
+        const routineCodes = taxSystem === 'general' ? ROUTINE_BUDGET_CODES_GENERAL : ROUTINE_BUDGET_CODES
+        if (isRoutineBotb0501(text, routineCodes)) continue
         const taxLine = text.split('по ').slice(1).find(l => {
           const code = l.match(/\b(\d{8})\b/)?.[1]
-          return code && !ROUTINE_BUDGET_CODES.has(code)
+          return code && !routineCodes.has(code)
         }) ?? text.slice(0, 120)
         alerts.push({
           type: 'new_document',

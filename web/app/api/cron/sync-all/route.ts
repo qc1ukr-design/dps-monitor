@@ -83,10 +83,11 @@ export async function GET(request: NextRequest) {
   const clientIds = tokens.map(t => t.client_id)
   const { data: clients } = await supabase
     .from('clients')
-    .select('id, name, edrpou')
+    .select('id, name, edrpou, tax_system')
     .in('id', clientIds)
-  const clientMap    = new Map(clients?.map(c => [c.id, c.name])   ?? [])
-  const clientEdrpouMap = new Map(clients?.map(c => [c.id, c.edrpou ?? '']) ?? [])
+  const clientMap          = new Map(clients?.map(c => [c.id, c.name])           ?? [])
+  const clientEdrpouMap    = new Map(clients?.map(c => [c.id, c.edrpou ?? ''])   ?? [])
+  const clientTaxSystemMap = new Map(clients?.map(c => [c.id, (c.tax_system ?? 'simplified') as 'simplified' | 'general']) ?? [])
 
   // ── User email + Telegram lookup (for notifications) ─────────────────────
   const uniqueUserIds = Array.from(new Set(tokens.map(t => t.user_id)))
@@ -199,7 +200,7 @@ export async function GET(request: NextRequest) {
 
           // Only alert when we have a prior cache (first run = just seed, no alerts)
           if (cachedIds.size > 0) {
-            const newDocAlerts = detectDocumentAlerts(rawDocs, cachedIds, clientName, clientEdrpouMap.get(clientId))
+            const newDocAlerts = detectDocumentAlerts(rawDocs, cachedIds, clientName, clientEdrpouMap.get(clientId), clientTaxSystemMap.get(clientId))
             if (newDocAlerts.length > 0) {
               await supabase.from('alerts').insert(
                 newDocAlerts.map(a => ({

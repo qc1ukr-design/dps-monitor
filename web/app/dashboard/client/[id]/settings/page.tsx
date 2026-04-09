@@ -34,6 +34,10 @@ export default function ClientSettingsPage() {
   const [isArchived, setIsArchived] = useState(false)
   const [archiveLoading, setArchiveLoading] = useState(false)
 
+  const [taxSystem, setTaxSystem] = useState<'simplified' | 'general'>('simplified')
+  const [taxSystemSaved, setTaxSystemSaved] = useState(false)
+  const [isYuo, setIsYuo] = useState(false)
+
   useEffect(() => {
     fetch(`/api/clients/${id}/kep`)
       .then(r => r.json())
@@ -45,7 +49,11 @@ export default function ClientSettingsPage() {
       .catch(() => {})
     fetch(`/api/clients/${id}`)
       .then(r => r.json())
-      .then(d => { if (typeof d.is_archived === 'boolean') setIsArchived(d.is_archived) })
+      .then(d => {
+        if (typeof d.is_archived === 'boolean') setIsArchived(d.is_archived)
+        if (d.tax_system === 'simplified' || d.tax_system === 'general') setTaxSystem(d.tax_system)
+        if (typeof d.edrpou === 'string') setIsYuo(/^\d{8}$/.test(d.edrpou))
+      })
       .catch(() => {})
   }, [id])
 
@@ -89,6 +97,20 @@ export default function ClientSettingsPage() {
     setKepStatus(newStatus)
     setKepUploadedInfo(kepInfo)
     setShowReplaceForm(false)
+  }
+
+  async function handleTaxSystemChange(value: 'simplified' | 'general') {
+    setTaxSystem(value)
+    setTaxSystemSaved(false)
+    const res = await fetch(`/api/clients/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tax_system: value }),
+    })
+    if (res.ok) {
+      setTaxSystemSaved(true)
+      setTimeout(() => setTaxSystemSaved(false), 3000)
+    }
   }
 
   async function handleArchiveToggle() {
@@ -281,6 +303,45 @@ export default function ClientSettingsPage() {
           </button>
         </form>
       </div>
+
+      {/* Tax system section — only for ФО/ФОП, not ЮО */}
+      {!isYuo && (
+        <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+          <div>
+            <h2 className="font-semibold text-gray-900">Система оподаткування</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Впливає на фільтрацію повідомлень BOTB0501 від ДПС.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="radio"
+                name="tax_system"
+                value="simplified"
+                checked={taxSystem === 'simplified'}
+                onChange={() => handleTaxSystemChange('simplified')}
+                className="w-4 h-4 text-blue-600"
+              />
+              <span className="text-sm text-gray-700">ФОП / єдиний податок</span>
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="radio"
+                name="tax_system"
+                value="general"
+                checked={taxSystem === 'general'}
+                onChange={() => handleTaxSystemChange('general')}
+                className="w-4 h-4 text-blue-600"
+              />
+              <span className="text-sm text-gray-700">ФОП / загальна система</span>
+            </label>
+          </div>
+          {taxSystemSaved && (
+            <div className="text-xs text-green-600 font-medium">Збережено</div>
+          )}
+        </div>
+      )}
 
       {/* Archive / Delete */}
       <div className="flex items-center justify-center gap-6">

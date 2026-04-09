@@ -28,7 +28,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   }
 
   const [{ data: client, error }, { data: cacheRows }, { data: kepRow }] = await Promise.all([
-    supabase.from('clients').select('id, name, edrpou, tax_system').eq('id', id).eq('user_id', userId).single(),
+    supabase.from('clients').select('id, name, edrpou').eq('id', id).eq('user_id', userId).single(),
     supabase.from('dps_cache')
       .select('data_type, data, fetched_at')
       .eq('client_id', id)

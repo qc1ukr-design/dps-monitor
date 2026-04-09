@@ -32,8 +32,35 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
   if (!client) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  // Return cached document IDs from dps_cache
-  const { data: cacheRow, error } = await supabase
+  // Try documents_full first (rich data), fall back to documents (IDs only)
+  const { data: fullCache, error } = await supabase
+    .from('dps_cache')
+    .select('data, fetched_at')
+    .eq('client_id', id)
+    .eq('user_id', user.id)
+    .eq('data_type', 'documents_full')
+    .maybeSingle()
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  type DocItem = { id?: string; cdoc?: string; name?: string; date?: string; csti?: string; text?: string }
+  type DocsCache = { documents?: DocItem[]; total?: number }
+
+  if (fullCache?.data) {
+    const cached = fullCache.data as DocsCache
+    const docs = (cached.documents ?? []).map((d, i) => ({
+      id:   d.id   ?? String(i),
+      cdoc: d.cdoc ?? '',
+      name: d.name ?? d.cdoc ?? 'Документ',
+      date: d.date ?? fullCache.fetched_at ?? new Date().toISOString(),
+      csti: d.csti,
+      text: d.text,
+    }))
+    return NextResponse.json(docs)
+  }
+
+  // Fallback: IDs-only cache
+  const { data: idCache } = await supabase
     .from('dps_cache')
     .select('data, fetched_at')
     .eq('client_id', id)
@@ -41,17 +68,12 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     .eq('data_type', 'documents')
     .maybeSingle()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-
-  const cached = cacheRow?.data as { ids?: string[] } | null
-  const ids = cached?.ids ?? []
-
-  // Return lightweight document stubs from cached IDs
+  const ids = (idCache?.data as { ids?: string[] } | null)?.ids ?? []
   const documents = ids.map((docId: string) => ({
-    id:       docId,
-    cdoc:     '',
-    name:     `Документ ${docId}`,
-    date:     cacheRow?.fetched_at ?? new Date().toISOString(),
+    id:   docId,
+    cdoc: '',
+    name: `Документ ${docId}`,
+    date: idCache?.fetched_at ?? new Date().toISOString(),
   }))
 
   return NextResponse.json(documents)

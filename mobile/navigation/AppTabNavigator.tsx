@@ -68,6 +68,14 @@ export default function AppTabNavigator(): React.JSX.Element {
         name="Clients"
         component={ClientsStackNavigator}
         options={{ title: 'Клієнти', headerShown: false }}
+        listeners={({ navigation }) => ({
+          tabPress: () => {
+            navigation.reset({
+              index: 0,
+              routes: [{ name: 'Clients' }],
+            })
+          },
+        })}
       />
       <Tab.Screen
         name="Alerts"

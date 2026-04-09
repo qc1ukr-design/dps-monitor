@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { ClientsStackParamList } from '../../navigation/types'
 import { useClients } from '../../hooks/useClients'
@@ -74,38 +75,44 @@ export default function ClientsListScreen({ navigation }: Props): React.JSX.Elem
   }
 
   return (
-    <FlatList
-      data={clients}
-      keyExtractor={(item) => item.id}
-      renderItem={({ item }) => (
-        <ClientRow client={item} onPress={() => handleClientPress(item)} />
-      )}
-      contentContainerStyle={[
-        styles.listContent,
-        clients.length === 0 && styles.listEmpty,
-      ]}
-      ListEmptyComponent={
-        <EmptyState
-          icon="🏢"
-          title="Клієнтів ще немає"
-          subtitle="Додайте першого клієнта через вебпортал"
-        />
-      }
-      ItemSeparatorComponent={() => <View style={styles.separator} />}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={handleRefresh}
-          tintColor={COLORS.PRIMARY}
-          colors={[COLORS.PRIMARY]}
-        />
-      }
-      style={styles.list}
-    />
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
+      <FlatList
+        data={clients}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => (
+          <ClientRow client={item} onPress={() => handleClientPress(item)} />
+        )}
+        contentContainerStyle={[
+          styles.listContent,
+          clients.length === 0 && styles.listEmpty,
+        ]}
+        ListEmptyComponent={
+          <EmptyState
+            icon="🏢"
+            title="Клієнтів ще немає"
+            subtitle="Додайте першого клієнта через вебпортал"
+          />
+        }
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={COLORS.PRIMARY}
+            colors={[COLORS.PRIMARY]}
+          />
+        }
+        style={styles.list}
+      />
+    </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: COLORS.BACKGROUND,
+  },
   list: {
     flex: 1,
     backgroundColor: COLORS.BACKGROUND,

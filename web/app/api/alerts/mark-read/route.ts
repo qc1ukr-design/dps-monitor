@@ -4,14 +4,21 @@
  * Optional query param: ?client_id=<uuid> — marks only that client's alerts.
  */
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { mobileAuth } from '@/lib/supabase/mobile'
 
 export async function POST(request: NextRequest) {
-  const supabase = await createClient()
-  const { data: { user }, error: authError } = await supabase.auth.getUser()
-  if (authError || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { supabase, user } = await mobileAuth(request)
+  if (!supabase || !user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const clientId = request.nextUrl.searchParams.get('client_id')
+  let clientId: string | null = request.nextUrl.searchParams.get('client_id')
+  if (!clientId) {
+    try {
+      const body = await request.json()
+      clientId = body?.client_id ?? null
+    } catch {
+      // no body — mark all
+    }
+  }
 
   let query = supabase
     .from('alerts')

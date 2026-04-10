@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { mobileAuth } from '@/lib/supabase/mobile'
+import { createServiceClient } from '@/lib/supabase/service'
 
 interface RouteParams {
   params: Promise<{ id: string }>
@@ -27,6 +28,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     userId = user.id
   }
 
+  const serviceSupabase = createServiceClient()
+
   const [{ data: client, error }, { data: cacheRows }, { data: kepRow }, { data: tokenRow }] = await Promise.all([
     supabase.from('clients').select('id, name, edrpou').eq('id', id).eq('user_id', userId).single(),
     supabase.from('dps_cache')
@@ -34,9 +37,12 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       .eq('client_id', id)
       .eq('user_id', userId)
       .in('data_type', ['budget', 'archive_flag', 'profile']),
-    supabase.from('kep_credentials')
+    // Use service client — kep_credentials RLS may block anon-key mobile clients
+    // (ownership already verified by clients query above)
+    serviceSupabase.from('kep_credentials')
       .select('valid_to, owner_name, client_name')
       .eq('client_id', id)
+      .eq('user_id', userId)
       .eq('is_active', true)
       .limit(1)
       .maybeSingle(),

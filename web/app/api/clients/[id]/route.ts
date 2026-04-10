@@ -30,22 +30,13 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
   const serviceSupabase = createServiceClient()
 
-  const [{ data: client, error }, { data: cacheRows }, { data: kepRow }, { data: tokenRow }] = await Promise.all([
+  const [{ data: client, error }, { data: cacheRows }, { data: tokenRow }] = await Promise.all([
     supabase.from('clients').select('id, name, edrpou').eq('id', id).eq('user_id', userId).single(),
     supabase.from('dps_cache')
       .select('data_type, data, fetched_at')
       .eq('client_id', id)
       .eq('user_id', userId)
       .in('data_type', ['budget', 'archive_flag', 'profile']),
-    // Use service client — kep_credentials RLS may block anon-key mobile clients
-    // (ownership already verified by clients query above)
-    serviceSupabase.from('kep_credentials')
-      .select('valid_to, owner_name, client_name')
-      .eq('client_id', id)
-      .eq('user_id', userId)
-      .eq('is_active', true)
-      .limit(1)
-      .maybeSingle(),
     supabase.from('api_tokens')
       .select('kep_owner_name, kep_valid_to')
       .eq('client_id', id)
@@ -53,6 +44,17 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       .not('kep_encrypted', 'is', null)
       .maybeSingle(),
   ])
+
+  // Use service client for kep_credentials — RLS may block anon-key mobile clients
+  // (ownership already verified by clients query above)
+  const { data: kepRow } = await serviceSupabase
+    .from('kep_credentials')
+    .select('valid_to, owner_name, client_name')
+    .eq('client_id', id)
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .limit(1)
+    .maybeSingle()
 
   if (error || !client) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
@@ -74,6 +76,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     registrationDate?: string; taxAuthority?: string
     accountingType?: string; address?: string
     kvedList?: Array<{ code: string; name: string; isPrimary?: boolean }>
+    vatNumber?: string | null
   }
   const profile = profileRow?.data as ProfileData | null
 

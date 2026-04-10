@@ -72,6 +72,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     overpayment:      totalOverpayment,
     lastSyncAt:       budgetRow?.fetched_at ?? null,
     kepValidTo:       kepRow?.valid_to ?? null,
+    director:         kepRow?.owner_name ?? null,
     rnokpp:           profile?.rnokpp ?? null,
     taxStatus:        profile?.status ?? null,
     registrationDate: profile?.registrationDate ?? null,

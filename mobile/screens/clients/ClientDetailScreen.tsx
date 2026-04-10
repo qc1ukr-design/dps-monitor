@@ -140,14 +140,22 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
   function handleShareProfile(): void {
     if (!client) return
     const lines: string[] = [`📋 ${client.name}`]
-    if (client.edrpou)          lines.push(`ЄДРПОУ: ${client.edrpou}`)
-    if (client.rnokpp)          lines.push(`РНОКПП: ${client.rnokpp}`)
-    if (client.vatNumber)       lines.push(`Номер платника ПДВ: ${client.vatNumber}`)
-    if (client.taxStatus)       lines.push(`Статус: ${client.taxStatus}`)
+    if (client.edrpou)           lines.push(`ЄДРПОУ: ${client.edrpou}`)
+    if (client.rnokpp)           lines.push(`РНОКПП: ${client.rnokpp}`)
+    if (client.vatNumber)        lines.push(`Номер платника ПДВ: ${client.vatNumber}`)
+    if (client.taxStatus)        lines.push(`Статус: ${client.taxStatus}`)
     if (client.registrationDate) lines.push(`Дата реєстрації: ${client.registrationDate}`)
-    if (client.taxAuthority)    lines.push(`Контролюючий орган: ${client.taxAuthority}`)
-    if (client.accountingType)  lines.push(`Система оподаткування: ${client.accountingType}`)
-    if (client.address)         lines.push(`Адреса: ${client.address}`)
+    if (client.taxAuthority)     lines.push(`Контролюючий орган: ${client.taxAuthority}`)
+    if (client.accountingType)   lines.push(`Система оподаткування: ${client.accountingType}`)
+    if (client.address)          lines.push(`Адреса: ${client.address}`)
+    if (client.director)         lines.push(`Директор: ${client.director}`)
+    if (client.kvedList && client.kvedList.length > 0) {
+      lines.push(`\nКВЕДи:`)
+      client.kvedList.forEach(k => {
+        const primary = k.isPrimary ? ' (основний)' : ''
+        lines.push(`  ${k.code} — ${k.name}${primary}`)
+      })
+    }
     Share.share({ message: lines.join('\n') })
   }
 
@@ -213,6 +221,9 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
         ) : null}
         {client.vatNumber ? (
           <InfoRow label="Номер платника ПДВ" value={client.vatNumber} />
+        ) : null}
+        {client.director ? (
+          <InfoRow label="Директор" value={client.director} />
         ) : null}
         {client.taxStatus ? (
           <InfoRow label="Статус платника" value={client.taxStatus} />

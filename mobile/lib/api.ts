@@ -38,6 +38,7 @@ export interface ClientDetail {
   address?: string | null
   kvedList?: KvedEntry[] | null
   vatNumber?: string | null
+  director?: string | null
 }
 
 export interface Document {

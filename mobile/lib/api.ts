@@ -10,6 +10,11 @@ export interface Client {
   status?: string
 }
 
+export interface ClientsResponse {
+  clients: Client[]
+  lastSyncAt: string | null
+}
+
 export interface ClientDetail {
   id: string
   name: string
@@ -40,9 +45,27 @@ export interface Alert {
   created_at: string
 }
 
-async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+export interface TaxReport {
+  id: string
+  name: string
+  formCode: string
+  period: string
+  submittedAt: string
+  status: 'accepted' | 'rejected' | 'processing' | 'pending'
+  statusText: string
+  regNumber: string
+}
+
+export interface ReportsResponse {
+  reports: TaxReport[]
+  total: number
+  hasToken: boolean
+  noAccess?: boolean
+}
+
+async function apiFetch<T>(path: string, options: RequestInit = {}, timeoutMs = 15_000): Promise<T> {
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 15_000)
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     const { data: { session } } = await supabase.auth.getSession()
@@ -85,8 +108,12 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   }
 }
 
-export function getClients(): Promise<Client[]> {
-  return apiFetch<Client[]>('/api/clients')
+export function getClients(): Promise<ClientsResponse> {
+  return apiFetch<ClientsResponse>('/api/clients')
+}
+
+export function syncAll(clientIds: string[]): Promise<Array<{ success: boolean }>> {
+  return Promise.all(clientIds.map(id => syncClient(id)))
 }
 
 export function getClient(id: string): Promise<ClientDetail> {
@@ -100,7 +127,7 @@ export function getDocuments(id: string): Promise<Document[]> {
 export function syncClient(id: string): Promise<{ success: boolean }> {
   return apiFetch<{ success: boolean }>(`/api/clients/${id}/sync`, {
     method: 'POST',
-  })
+  }, 60_000)
 }
 
 export function getAlerts(): Promise<Alert[]> {
@@ -112,4 +139,8 @@ export function markAlertsRead(clientId?: string): Promise<{ success: boolean }>
     method: 'POST',
     body: clientId ? JSON.stringify({ client_id: clientId }) : undefined,
   })
+}
+
+export function getReports(id: string): Promise<ReportsResponse> {
+  return apiFetch<ReportsResponse>(`/api/clients/${id}/reports`)
 }

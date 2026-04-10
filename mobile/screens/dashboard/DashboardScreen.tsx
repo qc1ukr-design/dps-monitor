@@ -1,9 +1,11 @@
 import React, { useMemo } from 'react'
 import {
+  ActivityIndicator,
   FlatList,
   RefreshControl,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native'
 import { useClients } from '../../hooks/useClients'
@@ -45,8 +47,19 @@ function ClientShortRow({ client }: ClientShortRowProps): React.JSX.Element {
   )
 }
 
+function formatSyncDate(iso: string | null): string {
+  if (!iso) return 'ще не оновлювалось'
+  const d = new Date(iso)
+  const day = String(d.getDate()).padStart(2, '0')
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const year = d.getFullYear()
+  const hours = String(d.getHours()).padStart(2, '0')
+  const minutes = String(d.getMinutes()).padStart(2, '0')
+  return `${day}.${month}.${year} о ${hours}:${minutes}`
+}
+
 export default function DashboardScreen(): React.JSX.Element {
-  const { clients, loading, error, refresh } = useClients()
+  const { clients, lastSyncAt, loading, syncing, error, refresh, syncAllClients } = useClients()
   const [refreshing, setRefreshing] = React.useState(false)
 
   async function handleRefresh(): Promise<void> {
@@ -119,6 +132,24 @@ export default function DashboardScreen(): React.JSX.Element {
         </View>
       </View>
 
+      <View style={styles.syncRow}>
+        <Text style={styles.syncDate}>
+          Оновлено: {formatSyncDate(lastSyncAt)}
+        </Text>
+        <TouchableOpacity
+          style={[styles.syncButton, syncing && styles.syncButtonDisabled]}
+          onPress={syncAllClients}
+          disabled={syncing}
+          activeOpacity={0.7}
+        >
+          {syncing ? (
+            <ActivityIndicator size="small" color={COLORS.CARD} />
+          ) : (
+            <Text style={styles.syncButtonText}>Оновити всіх</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+
       {clients.length > 0 && (
         <Text style={styles.listTitle}>Клієнти</Text>
       )}
@@ -165,6 +196,36 @@ const styles = StyleSheet.create({
   gridRow: {
     flexDirection: 'row',
     marginBottom: 0,
+  },
+  syncRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 8,
+  },
+  syncDate: {
+    fontSize: 12,
+    color: COLORS.TEXT_SECONDARY,
+    flexShrink: 1,
+    marginRight: 8,
+  },
+  syncButton: {
+    backgroundColor: COLORS.PRIMARY,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    minWidth: 110,
+    alignItems: 'center',
+  },
+  syncButtonDisabled: {
+    opacity: 0.6,
+  },
+  syncButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.CARD,
   },
   listTitle: {
     fontSize: 13,

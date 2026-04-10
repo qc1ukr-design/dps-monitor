@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const [{ data: clients, error }, { data: budgets }] = await Promise.all([
+  const [{ data: clients, error }, { data: budgets }, { data: syncTimes }] = await Promise.all([
     supabase
       .from('clients')
       .select('id, name, edrpou')
@@ -26,6 +26,13 @@ export async function GET(request: NextRequest) {
       .select('client_id, data')
       .eq('user_id', user.id)
       .eq('data_type', 'budget'),
+    supabase
+      .from('dps_cache')
+      .select('fetched_at')
+      .eq('user_id', user.id)
+      .eq('data_type', 'budget')
+      .order('fetched_at', { ascending: false })
+      .limit(1),
   ])
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -52,5 +59,6 @@ export async function GET(request: NextRequest) {
     }
   })
 
-  return NextResponse.json(result)
+  const lastSyncAt = syncTimes?.[0]?.fetched_at ?? null
+  return NextResponse.json({ clients: result, lastSyncAt })
 }

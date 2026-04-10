@@ -31,7 +31,7 @@ function ClientRow({ client, onPress }: ClientRowProps): React.JSX.Element {
   return (
     <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.7}>
       <View style={styles.rowMain}>
-        <Text style={styles.clientName} numberOfLines={1}>
+        <Text style={styles.clientName}>
           {client.name}
         </Text>
         <Text style={styles.clientCode}>{client.edrpou}</Text>

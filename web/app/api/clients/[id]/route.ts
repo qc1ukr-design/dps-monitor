@@ -27,7 +27,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     userId = user.id
   }
 
-  const [{ data: client, error }, { data: cacheRows }, { data: kepRow }] = await Promise.all([
+  const [{ data: client, error }, { data: cacheRows }, { data: kepRow }, { data: tokenRow }] = await Promise.all([
     supabase.from('clients').select('id, name, edrpou').eq('id', id).eq('user_id', userId).single(),
     supabase.from('dps_cache')
       .select('data_type, data, fetched_at')
@@ -39,6 +39,12 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       .eq('client_id', id)
       .eq('is_active', true)
       .limit(1)
+      .maybeSingle(),
+    supabase.from('api_tokens')
+      .select('kep_owner_name, kep_valid_to')
+      .eq('client_id', id)
+      .eq('user_id', userId)
+      .not('kep_encrypted', 'is', null)
       .maybeSingle(),
   ])
 
@@ -71,8 +77,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     debt:             totalDebt,
     overpayment:      totalOverpayment,
     lastSyncAt:       budgetRow?.fetched_at ?? null,
-    kepValidTo:       kepRow?.valid_to ?? null,
-    director:         kepRow?.owner_name ?? null,
+    kepValidTo:       kepRow?.valid_to ?? tokenRow?.kep_valid_to ?? null,
+    director:         kepRow?.owner_name ?? tokenRow?.kep_owner_name ?? null,
     rnokpp:           profile?.rnokpp ?? null,
     taxStatus:        profile?.status ?? null,
     registrationDate: profile?.registrationDate ?? null,

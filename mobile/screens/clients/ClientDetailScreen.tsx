@@ -141,7 +141,7 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
     if (!client) return
     const lines: string[] = [`📋 ${client.name}`]
     if (client.edrpou)           lines.push(`ЄДРПОУ: ${client.edrpou}`)
-    if (client.rnokpp)           lines.push(`РНОКПП: ${client.rnokpp}`)
+    if (client.rnokpp && client.rnokpp !== client.edrpou) lines.push(`РНОКПП: ${client.rnokpp}`)
     if (client.vatNumber)        lines.push(`Номер платника ПДВ: ${client.vatNumber}`)
     if (client.taxStatus)        lines.push(`Статус: ${client.taxStatus}`)
     if (client.registrationDate) lines.push(`Дата реєстрації: ${client.registrationDate}`)
@@ -216,7 +216,7 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
         {client.edrpou ? (
           <InfoRow label="ЄДРПОУ" value={client.edrpou} />
         ) : null}
-        {client.rnokpp ? (
+        {client.rnokpp && client.rnokpp !== client.edrpou ? (
           <InfoRow label="РНОКПП" value={client.rnokpp} />
         ) : null}
         {client.vatNumber ? (

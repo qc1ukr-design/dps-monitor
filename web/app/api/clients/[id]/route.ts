@@ -35,7 +35,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       .eq('user_id', userId)
       .in('data_type', ['budget', 'archive_flag', 'profile']),
     supabase.from('kep_credentials')
-      .select('valid_to, owner_name')
+      .select('valid_to, owner_name, client_name')
       .eq('client_id', id)
       .eq('is_active', true)
       .limit(1)
@@ -78,7 +78,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     overpayment:      totalOverpayment,
     lastSyncAt:       budgetRow?.fetched_at ?? null,
     kepValidTo:       kepRow?.valid_to ?? tokenRow?.kep_valid_to ?? null,
-    director:         kepRow?.owner_name ?? tokenRow?.kep_owner_name ?? null,
+    director:         kepRow?.owner_name ?? (kepRow as { client_name?: string } | null)?.client_name ?? tokenRow?.kep_owner_name ?? null,
     rnokpp:           profile?.rnokpp ?? null,
     taxStatus:        profile?.status ?? null,
     registrationDate: profile?.registrationDate ?? null,

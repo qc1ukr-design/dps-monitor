@@ -33,7 +33,14 @@ export default function ClientsStackNavigator(): React.JSX.Element {
       <Stack.Screen
         name="ClientDetail"
         component={ClientDetailScreen}
-        options={({ route }) => ({ title: route.params.clientName })}
+        options={({ route }) => ({
+          title: route.params.clientName,
+          headerTitleStyle: {
+            fontWeight: '600',
+            fontSize: 15,
+          },
+          headerTitleAllowFontScaling: false,
+        })}
       />
       <Stack.Screen
         name="ClientDocuments"

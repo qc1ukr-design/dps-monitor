@@ -19,7 +19,6 @@ import ErrorState from '../../components/ui/ErrorState'
 
 type Props = NativeStackScreenProps<ClientsStackParamList, 'ClientDetail'>
 
-
 function formatDateTime(dateStr: string): string {
   try {
     return new Date(dateStr).toLocaleString('uk-UA', {
@@ -116,6 +115,17 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
     navigation.navigate('ClientDocuments', { clientId, clientName })
   }
 
+  function handleViewReports(): void {
+    // Navigate to Reports tab → ClientReports screen
+    const parent = navigation.getParent()
+    if (parent) {
+      parent.navigate('Reports' as never, {
+        screen: 'ClientReports',
+        params: { clientId, clientName },
+      } as never)
+    }
+  }
+
   if (loading && !refreshing) {
     return <LoadingScreen />
   }
@@ -132,6 +142,11 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
   const hasOverpayment =
     typeof client.overpayment === 'number' && client.overpayment > 0
 
+  const hasProfile = !!(
+    client.taxStatus || client.registrationDate || client.taxAuthority ||
+    client.accountingType || client.address || client.rnokpp
+  )
+
   return (
     <ScrollView
       style={styles.scroll}
@@ -145,6 +160,55 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
         />
       }
     >
+      {/* Основна інформація */}
+      <Section title="Загальна інформація">
+        <InfoRow label="Назва / ПІБ" value={client.name} />
+        {client.edrpou ? (
+          <InfoRow label="ЄДРПОУ" value={client.edrpou} />
+        ) : null}
+        {client.rnokpp ? (
+          <InfoRow label="РНОКПП" value={client.rnokpp} />
+        ) : null}
+        {client.taxStatus ? (
+          <InfoRow label="Статус платника" value={client.taxStatus} />
+        ) : null}
+        {client.registrationDate ? (
+          <InfoRow label="Дата реєстрації" value={client.registrationDate} />
+        ) : null}
+        {client.taxAuthority ? (
+          <InfoRow label="Контролюючий орган" value={client.taxAuthority} />
+        ) : null}
+        {client.accountingType ? (
+          <InfoRow label="Система оподаткування" value={client.accountingType} />
+        ) : null}
+        {client.address ? (
+          <InfoRow label="Адреса" value={client.address} />
+        ) : null}
+        {!hasProfile && !client.edrpou && (
+          <Text style={styles.noData}>Немає даних — потрібна синхронізація</Text>
+        )}
+      </Section>
+
+      {/* КВЕДи */}
+      {client.kvedList && client.kvedList.length > 0 && (
+        <Section title="КВЕДи">
+          {client.kvedList.map((kved, i) => (
+            <View key={i} style={styles.kvedRow}>
+              <View style={styles.kvedCodeBadge}>
+                <Text style={styles.kvedCode}>{kved.code}</Text>
+              </View>
+              <Text style={styles.kvedName} numberOfLines={2}>{kved.name}</Text>
+              {kved.isPrimary && (
+                <View style={styles.kvedPrimaryBadge}>
+                  <Text style={styles.kvedPrimaryText}>основний</Text>
+                </View>
+              )}
+            </View>
+          ))}
+        </Section>
+      )}
+
+      {/* Фінансовий стан */}
       <Section title="Фінансовий стан">
         {typeof client.debt === 'number' && (
           <InfoRow
@@ -160,16 +224,12 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
             valueColor={hasOverpayment ? COLORS.SUCCESS : COLORS.TEXT_SECONDARY}
           />
         )}
-        {typeof client.status === 'string' && (
-          <InfoRow label="Статус платника" value={client.status} />
+        {client.debt === undefined && client.overpayment === undefined && (
+          <Text style={styles.noData}>Немає даних</Text>
         )}
-        {client.debt === undefined &&
-          client.overpayment === undefined &&
-          client.status === undefined && (
-            <Text style={styles.noData}>Немає даних</Text>
-          )}
       </Section>
 
+      {/* КЕП */}
       {typeof client.kepValidTo === 'string' && (
         <Section title="КЕП">
           <InfoRow
@@ -184,6 +244,7 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
         </Section>
       )}
 
+      {/* Синхронізація */}
       <Section title="Синхронізація">
         <TouchableOpacity
           style={[styles.syncButton, syncing && styles.syncButtonDisabled]}
@@ -219,15 +280,32 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
         )}
       </Section>
 
-      <Section title="Документи">
+      {/* Документи та Звіти */}
+      <Section title="Документи та звіти">
         <TouchableOpacity
-          style={styles.docsButton}
+          style={styles.navButton}
           onPress={handleViewDocuments}
           activeOpacity={0.8}
         >
-          <Text style={styles.docsButtonIcon}>📂</Text>
-          <Text style={styles.docsButtonText}>Переглянути документи</Text>
-          <Text style={styles.docsButtonChevron}>›</Text>
+          <Text style={styles.navButtonIcon}>📥</Text>
+          <View style={styles.navButtonContent}>
+            <Text style={styles.navButtonTitle}>Вхідна документація</Text>
+            <Text style={styles.navButtonSubtitle}>Листи та повідомлення від ДПС</Text>
+          </View>
+          <Text style={styles.navButtonChevron}>›</Text>
+        </TouchableOpacity>
+        <View style={styles.separator} />
+        <TouchableOpacity
+          style={styles.navButton}
+          onPress={handleViewReports}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.navButtonIcon}>📋</Text>
+          <View style={styles.navButtonContent}>
+            <Text style={styles.navButtonTitle}>Звітність</Text>
+            <Text style={styles.navButtonSubtitle}>Статуси поданих звітів</Text>
+          </View>
+          <Text style={styles.navButtonChevron}>›</Text>
         </TouchableOpacity>
       </Section>
     </ScrollView>
@@ -270,10 +348,11 @@ const styles = StyleSheet.create({
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.BORDER,
+    gap: 8,
   },
   infoLabel: {
     fontSize: 14,
@@ -292,6 +371,40 @@ const styles = StyleSheet.create({
     color: COLORS.TEXT_SECONDARY,
     paddingVertical: 12,
     textAlign: 'center',
+  },
+  kvedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.BORDER,
+    gap: 8,
+  },
+  kvedCodeBadge: {
+    backgroundColor: '#F3F4F6',
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  kvedCode: {
+    fontSize: 12,
+    fontFamily: 'monospace' as const,
+    color: '#4B5563',
+  },
+  kvedName: {
+    flex: 1,
+    fontSize: 13,
+    color: COLORS.TEXT,
+  },
+  kvedPrimaryBadge: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  kvedPrimaryText: {
+    fontSize: 11,
+    color: '#2563EB',
   },
   syncButton: {
     backgroundColor: COLORS.PRIMARY,
@@ -320,24 +433,34 @@ const styles = StyleSheet.create({
   syncResultError: {
     color: COLORS.DANGER,
   },
-  docsButton: {
+  navButton: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 14,
+    gap: 12,
   },
-  docsButtonIcon: {
-    fontSize: 20,
-    marginRight: 10,
+  navButtonIcon: {
+    fontSize: 22,
   },
-  docsButtonText: {
+  navButtonContent: {
     flex: 1,
+  },
+  navButtonTitle: {
     fontSize: 15,
     fontWeight: '500',
     color: COLORS.PRIMARY,
   },
-  docsButtonChevron: {
+  navButtonSubtitle: {
+    fontSize: 12,
+    color: COLORS.TEXT_SECONDARY,
+    marginTop: 1,
+  },
+  navButtonChevron: {
     fontSize: 22,
     color: COLORS.TEXT_SECONDARY,
-    marginLeft: 4,
+  },
+  separator: {
+    height: 1,
+    backgroundColor: COLORS.BORDER,
   },
 })

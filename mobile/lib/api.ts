@@ -15,6 +15,12 @@ export interface ClientsResponse {
   lastSyncAt: string | null
 }
 
+export interface KvedEntry {
+  code: string
+  name: string
+  isPrimary?: boolean
+}
+
 export interface ClientDetail {
   id: string
   name: string
@@ -24,6 +30,13 @@ export interface ClientDetail {
   status?: string
   kepValidTo?: string
   lastSyncAt?: string
+  rnokpp?: string | null
+  taxStatus?: string | null
+  registrationDate?: string | null
+  taxAuthority?: string | null
+  accountingType?: string | null
+  address?: string | null
+  kvedList?: KvedEntry[] | null
 }
 
 export interface Document {

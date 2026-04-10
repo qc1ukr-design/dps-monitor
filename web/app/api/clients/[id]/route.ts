@@ -33,7 +33,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       .select('data_type, data, fetched_at')
       .eq('client_id', id)
       .eq('user_id', userId)
-      .in('data_type', ['budget', 'archive_flag']),
+      .in('data_type', ['budget', 'archive_flag', 'profile']),
     supabase.from('kep_credentials')
       .select('valid_to, owner_name')
       .eq('client_id', id)
@@ -46,6 +46,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
   const archiveRow = cacheRows?.find(r => r.data_type === 'archive_flag')
   const budgetRow  = cacheRows?.find(r => r.data_type === 'budget')
+  const profileRow = cacheRows?.find(r => r.data_type === 'profile')
 
   const is_archived = (archiveRow?.data as { archived?: boolean } | null)?.archived ?? false
 
@@ -56,13 +57,28 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   const totalDebt = calculations.reduce((s, r) => s + (r.debt ?? 0), 0)
   const totalOverpayment = calculations.reduce((s, r) => s + (r.overpayment ?? 0), 0)
 
+  type ProfileData = {
+    name?: string; rnokpp?: string; status?: string
+    registrationDate?: string; taxAuthority?: string
+    accountingType?: string; address?: string
+    kvedList?: Array<{ code: string; name: string; isPrimary?: boolean }>
+  }
+  const profile = profileRow?.data as ProfileData | null
+
   return NextResponse.json({
     ...client,
     is_archived,
-    debt:         totalDebt,
-    overpayment:  totalOverpayment,
-    lastSyncAt:   budgetRow?.fetched_at ?? null,
-    kepValidTo:   kepRow?.valid_to ?? null,
+    debt:             totalDebt,
+    overpayment:      totalOverpayment,
+    lastSyncAt:       budgetRow?.fetched_at ?? null,
+    kepValidTo:       kepRow?.valid_to ?? null,
+    rnokpp:           profile?.rnokpp ?? null,
+    taxStatus:        profile?.status ?? null,
+    registrationDate: profile?.registrationDate ?? null,
+    taxAuthority:     profile?.taxAuthority ?? null,
+    accountingType:   profile?.accountingType ?? null,
+    address:          profile?.address ?? null,
+    kvedList:         profile?.kvedList ?? null,
   })
 }
 

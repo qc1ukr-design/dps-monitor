@@ -79,6 +79,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     accountingType:   profile?.accountingType ?? null,
     address:          profile?.address ?? null,
     kvedList:         profile?.kvedList ?? null,
+    vatNumber:        profile?.vatNumber ?? null,
   })
 }
 

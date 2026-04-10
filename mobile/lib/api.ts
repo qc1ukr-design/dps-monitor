@@ -37,6 +37,7 @@ export interface ClientDetail {
   accountingType?: string | null
   address?: string | null
   kvedList?: KvedEntry[] | null
+  vatNumber?: string | null
 }
 
 export interface Document {

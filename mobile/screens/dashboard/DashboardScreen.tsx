@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
+import { useNavigation } from '@react-navigation/native'
 import { useClients } from '../../hooks/useClients'
 import { Client } from '../../lib/api'
 import { COLORS } from '../../lib/constants'
@@ -21,13 +22,21 @@ interface ClientShortRowProps {
 }
 
 function ClientShortRow({ client }: ClientShortRowProps): React.JSX.Element {
+  const navigation = useNavigation()
   const hasDebt = typeof client.debt === 'number' && client.debt > 0
   const hasOverpayment =
     typeof client.overpayment === 'number' && client.overpayment > 0
 
+  function handlePress(): void {
+    navigation.navigate('Clients' as never, {
+      screen: 'ClientDetail',
+      params: { clientId: client.id, clientName: client.name },
+    } as never)
+  }
+
   return (
-    <View style={styles.clientRow}>
-      <Text style={styles.clientName} numberOfLines={1}>
+    <TouchableOpacity style={styles.clientRow} onPress={handlePress} activeOpacity={0.7}>
+      <Text style={styles.clientName} numberOfLines={2}>
         {client.name}
       </Text>
       {hasDebt && (
@@ -43,7 +52,7 @@ function ClientShortRow({ client }: ClientShortRowProps): React.JSX.Element {
       {!hasDebt && !hasOverpayment && (
         <Text style={styles.neutralValue}>0.00 грн</Text>
       )}
-    </View>
+    </TouchableOpacity>
   )
 }
 

@@ -3,11 +3,16 @@ import {
   ActivityIndicator,
   RefreshControl,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
+  ToastAndroid,
   TouchableOpacity,
   View,
+  Platform,
+  Alert,
 } from 'react-native'
+import * as Clipboard from 'expo-clipboard'
 import { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { ClientsStackParamList } from '../../navigation/types'
 import { useClient } from '../../hooks/useClient'
@@ -16,6 +21,15 @@ import { COLORS } from '../../lib/constants'
 import { formatMoney, formatDate } from '../../lib/formatters'
 import LoadingScreen from '../../components/ui/LoadingScreen'
 import ErrorState from '../../components/ui/ErrorState'
+
+async function copyToClipboard(label: string, value: string): Promise<void> {
+  await Clipboard.setStringAsync(value)
+  if (Platform.OS === 'android') {
+    ToastAndroid.show(`${label} скопійовано`, ToastAndroid.SHORT)
+  } else {
+    Alert.alert('Скопійовано', `${label}: ${value}`, [{ text: 'OK' }], { cancelable: true })
+  }
+}
 
 type Props = NativeStackScreenProps<ClientsStackParamList, 'ClientDetail'>
 
@@ -69,16 +83,24 @@ interface InfoRowProps {
   label: string
   value: string
   valueColor?: string
+  copyable?: boolean
 }
 
-function InfoRow({ label, value, valueColor }: InfoRowProps): React.JSX.Element {
+function InfoRow({ label, value, valueColor, copyable = true }: InfoRowProps): React.JSX.Element {
   return (
-    <View style={styles.infoRow}>
+    <TouchableOpacity
+      style={styles.infoRow}
+      onPress={copyable ? () => copyToClipboard(label, value) : undefined}
+      activeOpacity={copyable ? 0.5 : 1}
+    >
       <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={[styles.infoValue, valueColor !== undefined && { color: valueColor }]}>
-        {value}
-      </Text>
-    </View>
+      <View style={styles.infoValueRow}>
+        <Text style={[styles.infoValue, valueColor !== undefined && { color: valueColor }]}>
+          {value}
+        </Text>
+        {copyable && <Text style={styles.copyIcon}>⎘</Text>}
+      </View>
+    </TouchableOpacity>
   )
 }
 
@@ -113,6 +135,20 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
 
   function handleViewDocuments(): void {
     navigation.navigate('ClientDocuments', { clientId, clientName })
+  }
+
+  function handleShareProfile(): void {
+    if (!client) return
+    const lines: string[] = [`📋 ${client.name}`]
+    if (client.edrpou)          lines.push(`ЄДРПОУ: ${client.edrpou}`)
+    if (client.rnokpp)          lines.push(`РНОКПП: ${client.rnokpp}`)
+    if (client.vatNumber)       lines.push(`Номер платника ПДВ: ${client.vatNumber}`)
+    if (client.taxStatus)       lines.push(`Статус: ${client.taxStatus}`)
+    if (client.registrationDate) lines.push(`Дата реєстрації: ${client.registrationDate}`)
+    if (client.taxAuthority)    lines.push(`Контролюючий орган: ${client.taxAuthority}`)
+    if (client.accountingType)  lines.push(`Система оподаткування: ${client.accountingType}`)
+    if (client.address)         lines.push(`Адреса: ${client.address}`)
+    Share.share({ message: lines.join('\n') })
   }
 
   function handleViewReports(): void {
@@ -161,13 +197,22 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
       }
     >
       {/* Основна інформація */}
-      <Section title="Загальна інформація">
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>Загальна інформація</Text>
+        <TouchableOpacity onPress={handleShareProfile} style={styles.shareButton} activeOpacity={0.7}>
+          <Text style={styles.shareButtonText}>Поділитись ↗</Text>
+        </TouchableOpacity>
+      </View>
+      <View style={[styles.sectionCard, { marginHorizontal: 16, marginBottom: 16 }]}>
         <InfoRow label="Назва / ПІБ" value={client.name} />
         {client.edrpou ? (
           <InfoRow label="ЄДРПОУ" value={client.edrpou} />
         ) : null}
         {client.rnokpp ? (
           <InfoRow label="РНОКПП" value={client.rnokpp} />
+        ) : null}
+        {client.vatNumber ? (
+          <InfoRow label="Номер платника ПДВ" value={client.vatNumber} />
         ) : null}
         {client.taxStatus ? (
           <InfoRow label="Статус платника" value={client.taxStatus} />
@@ -187,7 +232,7 @@ export default function ClientDetailScreen({ route, navigation }: Props): React.
         {!hasProfile && !client.edrpou && (
           <Text style={styles.noData}>Немає даних — потрібна синхронізація</Text>
         )}
-      </Section>
+      </View>
 
       {/* КВЕДи */}
       {client.kvedList && client.kvedList.length > 0 && (
@@ -325,14 +370,41 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginBottom: 16,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginHorizontal: 16,
+    marginBottom: 8,
+    paddingLeft: 4,
+  },
   sectionTitle: {
     fontSize: 13,
     fontWeight: '600',
     color: COLORS.TEXT_SECONDARY,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-    marginBottom: 8,
-    paddingLeft: 4,
+  },
+  shareButton: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  shareButtonText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: COLORS.PRIMARY,
+  },
+  infoValueRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  copyIcon: {
+    fontSize: 14,
+    color: COLORS.TEXT_SECONDARY,
+    opacity: 0.5,
   },
   sectionCard: {
     backgroundColor: COLORS.CARD,

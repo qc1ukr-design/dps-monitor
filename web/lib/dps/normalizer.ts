@@ -73,7 +73,7 @@ export function normalizeProfile(raw: unknown): TaxpayerProfile {
     accountingType = `Єдиний податок ${grup} група${stavka ? ` (${stavka}%)` : ''}`
   }
 
-  // Detect VAT payer status from groups
+  // Detect VAT payer status and extract VAT number from groups
   const groups = raw as DpsGroup[]
   const vatGroup = groups.find(g => g.title?.includes('ПДВ'))
   const hasVat = vatGroup && vatGroup.values && Object.keys(vatGroup.values).length > 0
@@ -82,6 +82,14 @@ export function normalizeProfile(raw: unknown): TaxpayerProfile {
     : grup
       ? `Єдиний податок ${grup} група`
       : 'Не платник ПДВ'
+
+  // Extract VAT registration number from VAT group
+  const vatValues = vatGroup?.values ?? {}
+  const vatNumber = str(
+    vatValues.NOM_IND_PDV ?? vatValues.IPDN ?? vatValues.NOM_CERT_PDV ??
+    vatValues.IND_PDV ?? vatValues.PDV_NUM ?? vatValues.NUM_PDV ??
+    vatValues.CERT_NUM ?? vatValues.NOM_CERT ?? vatValues.NUM_CERT ?? ''
+  ) || null
 
   // Extract address — DPS returns it as ADR_NS in "Реєстраційні дані" group
   const address = str(
@@ -128,6 +136,7 @@ export function normalizeProfile(raw: unknown): TaxpayerProfile {
     accountingType,
     address,
     kvedList: kvedList.length > 0 ? kvedList : undefined,
+    vatNumber,
   }
 }
 

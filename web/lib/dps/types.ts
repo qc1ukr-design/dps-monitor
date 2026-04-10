@@ -14,6 +14,7 @@ export interface TaxpayerProfile {
   accountingType: string
   address?: string
   kvedList?: KvedEntry[]
+  vatNumber?: string | null
 }
 
 export interface BudgetRow {

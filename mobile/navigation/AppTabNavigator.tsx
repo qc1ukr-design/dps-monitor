@@ -8,6 +8,7 @@ import { useAlerts } from '../hooks/useAlerts'
 import DashboardScreen from '../screens/dashboard/DashboardScreen'
 import ClientsStackNavigator from './ClientsStackNavigator'
 import AlertsScreen from '../screens/alerts/AlertsScreen'
+import ReportsStackNavigator from './ReportsStackNavigator'
 import ProfileScreen from '../screens/profile/ProfileScreen'
 
 const Tab = createBottomTabNavigator<AppTabParamList>()
@@ -22,6 +23,8 @@ function getTabIcon(routeName: keyof AppTabParamList, focused: boolean): Ionicon
       return focused ? 'people' : 'people-outline'
     case 'Alerts':
       return focused ? 'notifications' : 'notifications-outline'
+    case 'Reports':
+      return focused ? 'document-text' : 'document-text-outline'
     case 'Profile':
       return focused ? 'person' : 'person-outline'
   }
@@ -84,6 +87,11 @@ export default function AppTabNavigator(): React.JSX.Element {
           title: 'Алерти',
           tabBarBadge: unreadCount > 0 ? unreadCount : undefined,
         }}
+      />
+      <Tab.Screen
+        name="Reports"
+        component={ReportsStackNavigator}
+        options={{ title: 'Звіти', headerShown: false }}
       />
       <Tab.Screen
         name="Profile"

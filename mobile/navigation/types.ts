@@ -15,6 +15,14 @@ export type ClientsStackParamList = {
   }
 }
 
+export type ReportsStackParamList = {
+  ReportsList: undefined
+  ClientReports: {
+    clientId: string
+    clientName: string
+  }
+}
+
 export type AppTabParamList = {
   Dashboard: undefined
   Clients: {
@@ -22,5 +30,6 @@ export type AppTabParamList = {
     params: { clientId: string; clientName: string }
   } | undefined
   Alerts: undefined
+  Reports: undefined
   Profile: undefined
 }
